@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chess Automata Controller</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Plus+Jakarta+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="card">
+    <div class="card-header">
+      <div class="logo-container">
+        <div class="logo-glow"></div>
+        <svg class="logo" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M19 21H5C4.44772 21 4 20.5523 4 20V18C4 17.4477 4.44772 17 5 17H19C19.5523 17 20 17.4477 20 18V20C20 20.5523 19.5523 21 19 21Z" stroke="url(#logo-grad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M6 17L7 10H17L18 17" stroke="url(#logo-grad)" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M8 10C8 7.79086 9.79086 6 12 6C14.2091 6 16 7.79086 16 10" stroke="url(#logo-grad)" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="12" cy="4" r="2" stroke="url(#logo-grad)" stroke-width="2"/>
+          <defs>
+            <linearGradient id="logo-grad" x1="4" y1="4" x2="20" y2="21" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#3b82f6"/>
+              <stop offset="0.5" stop-color="#8b5cf6"/>
+              <stop offset="1" stop-color="#ec4899"/>
+            </linearGradient>
+          </defs>
+        </svg>
+      </div>
+      <div class="header-text">
+        <h1>Chess Automata</h1>
+        <p class="subtitle">Autonomous Humanoid Player</p>
+      </div>
+    </div>
+
+    <!-- Status Indicator Banner -->
+    <div class="status-banner" id="statusBanner">
+      <div class="pulse-indicator idle" id="statusPulse"></div>
+      <span id="statusText">System Idle</span>
+    </div>
+
+    <!-- Toggles Area -->
+    <div class="toggles-section">
+      <div class="toggle-control">
+        <div class="control-label-group">
+          <span class="control-title">Auto-Play Moves</span>
+          <span class="control-desc">Automatically executes moves</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="autoPlay" checked>
+          <span class="slider round"></span>
+        </label>
+      </div>
+
+      <div class="toggle-control">
+        <div class="control-label-group">
+          <span class="control-title">Auto-Queue Matches</span>
+          <span class="control-desc">Starts new game when ended</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="autoQueue" checked>
+          <span class="slider round"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Configurations Sliders -->
+    <div class="settings-section">
+      <h2>Engine Personalization</h2>
+
+      <div class="toggle-control" style="margin-bottom: 15px; flex-direction: column; align-items: flex-start; gap: 8px;">
+        <div class="control-label-group">
+          <span class="control-title">VPS API URL</span>
+          <span class="control-desc">URL to your Maia engine server</span>
+        </div>
+        <input type="text" id="engineUrl" placeholder="http://1.2.3.4:8000/move" style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #4b5563; background: #1f2937; color: white; outline: none; font-family: inherit;">
+      </div>
+
+      <div class="slider-control">
+        <div class="slider-label-row">
+          <span class="slider-title">Target Accuracy</span>
+          <span class="slider-val" id="accuracyVal">80%</span>
+        </div>
+        <input type="range" id="targetAccuracy" min="50" max="95" value="80" class="range-slider">
+        <div class="slider-desc">Ensures game accuracy stays below detection limits (<90% recommended)</div>
+      </div>
+
+      <div class="slider-control">
+        <div class="slider-label-row">
+          <span class="slider-title">Pre-move Probability</span>
+          <span class="slider-val" id="premoveVal">20%</span>
+        </div>
+        <input type="range" id="premoveProb" min="0" max="50" value="20" class="range-slider">
+        <div class="slider-desc">Odds of playing instant moves during forced recaptures</div>
+      </div>
+
+      <div class="slider-control">
+        <div class="slider-label-row">
+          <span class="slider-title">Thinking Speed</span>
+          <span class="slider-val" id="speedVal">3.5s</span>
+        </div>
+        <input type="range" id="thinkingSpeed" min="1.0" max="8.0" step="0.5" value="3.5" class="range-slider">
+        <div class="slider-desc">Base duration Stockfish spends analyzing moves</div>
+      </div>
+    </div>
+
+    <div class="card-footer">
+      <div class="footer-stat">
+        <span class="stat-lbl">Session Games</span>
+        <span class="stat-val" id="sessionGames">0</span>
+      </div>
+      <div class="vertical-divider"></div>
+      <div class="footer-stat">
+        <span class="stat-lbl">W / D / L</span>
+        <span class="stat-val" id="winLossRatio">0 / 0 / 0</span>
+      </div>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
