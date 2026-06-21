@@ -1,0 +1,286 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap');
+
+:root {
+  --ch-accent-color: #81b64c;
+  --ch-accent-hover: #a3d160;
+  --ch-bg-glass: rgba(20, 20, 23, 0.75);
+  --ch-border-glass: rgba(255, 255, 255, 0.1);
+  --ch-text-primary: #ffffff;
+  --ch-text-secondary: #a1a1aa;
+  --ch-radius-lg: 20px;
+  --ch-radius-md: 12px;
+  --ch-radius-sm: 8px;
+  --ch-shadow-lg: 0 10px 40px -10px rgba(0, 0, 0, 0.5);
+  --ch-shadow-sm: 0 4px 12px -2px rgba(0, 0, 0, 0.3);
+  --ch-font: 'Outfit', system-ui, -apple-system, sans-serif;
+  --ch-transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  --ch-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* --- Container --- */
+#chess-helper-root {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 99999;
+  font-family: var(--ch-font);
+}
+
+/* --- Floating Bubble --- */
+#chess-helper-bubble {
+  position: fixed;
+  width: 52px;
+  height: 52px;
+  background: var(--ch-bg-glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--ch-border-glass);
+  border-radius: 50%;
+  box-shadow: var(--ch-shadow-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  color: var(--ch-text-primary);
+  pointer-events: auto;
+  transition: transform 0.2s var(--ch-spring), box-shadow 0.2s ease;
+  z-index: 100000;
+  user-select: none;
+}
+
+#chess-helper-bubble:hover {
+  transform: scale(1.1);
+  box-shadow: 0 12px 30px rgba(129, 182, 76, 0.3);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+#chess-helper-bubble:active {
+  cursor: grabbing;
+  transform: scale(0.92);
+}
+
+#chess-helper-bubble svg {
+  width: 26px;
+  height: 26px;
+  fill: currentColor;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+}
+
+/* --- Main Panel --- */
+#chess-helper-panel {
+  position: fixed;
+  width: 280px;
+  background: rgba(18, 18, 20, 0.85);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--ch-border-glass);
+  border-radius: var(--ch-radius-lg);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  pointer-events: auto;
+  opacity: 0;
+  transform: scale(0.9);
+  transition: opacity 0.25s ease, transform 0.3s var(--ch-spring);
+  pointer-events: none;
+  /* Hidden by default */
+  transform-origin: center center;
+  /* Will be updated dynamically */
+}
+
+#chess-helper-panel.visible {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+
+/* --- Typography & Layout --- */
+.ch-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.ch-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ch-text-primary);
+  letter-spacing: -0.02em;
+}
+
+.ch-subtitle {
+  font-size: 11px;
+  color: var(--ch-text-secondary);
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ch-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #555;
+  transition: background-color 0.3s ease;
+}
+
+.ch-indicator.white {
+  background-color: #fff;
+  box-shadow: 0 0 8px #fff;
+}
+
+.ch-indicator.black {
+  background-color: #000;
+  border: 1px solid #444;
+}
+
+/* --- Controls --- */
+.ch-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.ch-label {
+  font-size: 13px;
+  color: var(--ch-text-primary);
+  font-weight: 500;
+}
+
+/* Switch */
+.ch-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+}
+
+.ch-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.ch-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(255, 255, 255, 0.1);
+  transition: .3s;
+  border-radius: 24px;
+}
+
+.ch-slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: #e4e4e7;
+  transition: .3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  border-radius: 50%;
+}
+
+input:checked+.ch-slider {
+  background-color: var(--ch-accent-color);
+}
+
+input:checked+.ch-slider:before {
+  transform: translateX(20px);
+  background: #fff;
+}
+
+/* Buttons */
+.ch-btn-group {
+  display: flex;
+  gap: 8px;
+}
+
+.ch-btn {
+  flex: 1;
+  padding: 12px;
+  border-radius: var(--ch-radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--ch-text-primary);
+  font-family: var(--ch-font);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--ch-transition);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  position: relative;
+  overflow: hidden;
+}
+
+.ch-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  transform: translateY(-2px);
+}
+
+.ch-btn:active {
+  transform: translateY(0);
+}
+
+.ch-btn-primary {
+  background: var(--ch-accent-color);
+  color: #121212;
+  border: none;
+  box-shadow: 0 4px 15px rgba(129, 182, 76, 0.4);
+}
+
+.ch-btn-primary:hover {
+  background: var(--ch-accent-hover);
+  box-shadow: 0 6px 20px rgba(129, 182, 76, 0.6);
+}
+
+.ch-icon {
+  font-size: 16px;
+}
+
+/* --- Visuals on Board --- */
+.ch-highlight {
+  position: absolute;
+  pointer-events: none;
+  z-index: 990;
+  opacity: 0.6;
+}
+
+.ch-arrow-svg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1000;
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.5));
+}
+
+.ch-arrow-line {
+  stroke: var(--ch-accent-color);
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
+  animation: dash 1s linear infinite;
+  stroke-linecap: round;
+}
+
+@keyframes dash {
+  to {
+    stroke-dashoffset: -10;
+  }
+}

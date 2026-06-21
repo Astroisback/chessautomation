@@ -21,7 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const defaults = {
     autoPlay: true,
     autoQueue: true,
-    engineUrl: '',
+    engineUrl: 'http://100.86.25.112:8000/move',
     targetAccuracy: 80,
     premoveProb: 20,
     thinkingSpeed: 3.5
