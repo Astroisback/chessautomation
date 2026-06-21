@@ -349,3 +349,149 @@ input:checked + .slider:before {
   height: 24px;
   background-color: var(--border-color);
 }
+
+/* Human Mode Toggle - Special Styling */
+.human-mode-toggle {
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  background: rgba(245, 158, 11, 0.04);
+}
+
+.human-mode-toggle:hover {
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.human-mode-title {
+  color: #fbbf24;
+}
+
+.human-switch input:checked + .slider {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.4);
+}
+
+/* Hidden utility */
+.hidden {
+  display: none !important;
+}
+
+/* ELO Climb Planner */
+.elo-climb-section {
+  border-top: 1px solid rgba(16, 185, 129, 0.15);
+}
+
+.elo-climb-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.elo-climb-header h2 {
+  margin-bottom: 0;
+}
+
+.mini-switch {
+  width: 30px;
+  height: 16px;
+}
+
+.mini-switch .slider:before {
+  height: 10px;
+  width: 10px;
+  left: 3px;
+  bottom: 3px;
+}
+
+.mini-switch input:checked + .slider:before {
+  transform: translateX(14px);
+}
+
+.mini-switch input:checked + .slider {
+  background: linear-gradient(135deg, #10b981, #059669);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+}
+
+.elo-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.elo-input-group {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.elo-label {
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+
+.elo-input-wrapper {
+  display: flex;
+  gap: 4px;
+}
+
+.elo-input {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: 1px solid #4b5563;
+  background: #1f2937;
+  color: white;
+  outline: none;
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.elo-input:focus {
+  border-color: #10b981;
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.2);
+}
+
+.detect-btn {
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  background: rgba(16, 185, 129, 0.1);
+  color: #10b981;
+  cursor: pointer;
+  font-size: 0.75rem;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.detect-btn:hover {
+  background: rgba(16, 185, 129, 0.2);
+  border-color: rgba(16, 185, 129, 0.5);
+}
+
+.elo-slider::-webkit-slider-thumb {
+  background: linear-gradient(135deg, #10b981, #059669) !important;
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.6) !important;
+}
+
+.elo-plan-summary {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.08), rgba(5, 150, 105, 0.04));
+  border: 1px solid rgba(16, 185, 129, 0.15);
+}
+
+.plan-text {
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.plan-text strong {
+  color: #10b981;
+  font-weight: 700;
+}

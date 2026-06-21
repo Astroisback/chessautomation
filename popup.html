@@ -61,6 +61,17 @@
           <span class="slider round"></span>
         </label>
       </div>
+
+      <div class="toggle-control human-mode-toggle">
+        <div class="control-label-group">
+          <span class="control-title human-mode-title">🧠 Human Mode</span>
+          <span class="control-desc">Mimics realistic human play patterns</span>
+        </div>
+        <label class="switch human-switch">
+          <input type="checkbox" id="humanMode" checked>
+          <span class="slider round"></span>
+        </label>
+      </div>
     </div>
 
     <!-- Configurations Sliders -->
@@ -100,6 +111,45 @@
         </div>
         <input type="range" id="thinkingSpeed" min="1.0" max="8.0" step="0.5" value="3.5" class="range-slider">
         <div class="slider-desc">Base duration engine spends analyzing moves</div>
+      </div>
+    </div>
+
+    <!-- ELO Climb Planner (Optional) -->
+    <div class="settings-section elo-climb-section">
+      <div class="elo-climb-header">
+        <h2>📈 ELO Climb Planner</h2>
+        <label class="switch mini-switch">
+          <input type="checkbox" id="eloClimbEnabled">
+          <span class="slider round"></span>
+        </label>
+      </div>
+
+      <div id="eloClimbSettings" class="hidden">
+        <div class="elo-row">
+          <div class="elo-input-group">
+            <span class="elo-label">Current ELO</span>
+            <div class="elo-input-wrapper">
+              <input type="number" id="currentElo" value="800" min="100" max="3000" class="elo-input">
+              <button id="detectElo" class="detect-btn" title="Auto-detect from chess.com">🔍</button>
+            </div>
+          </div>
+          <div class="elo-input-group">
+            <span class="elo-label">Target ELO</span>
+            <input type="number" id="targetElo" value="1100" min="100" max="3000" class="elo-input">
+          </div>
+        </div>
+
+        <div class="slider-control" style="margin-top: 8px;">
+          <div class="slider-label-row">
+            <span class="slider-title">Games to Reach</span>
+            <span class="slider-val" id="gamesToReachVal">60</span>
+          </div>
+          <input type="range" id="gamesToReach" min="10" max="200" value="60" class="range-slider elo-slider">
+        </div>
+
+        <div class="elo-plan-summary" id="eloPlanSummary">
+          <span class="plan-text">Win ~60% → gain ~5 ELO/game → reach <strong>1100</strong> in <strong>60</strong> games</span>
+        </div>
       </div>
     </div>
 

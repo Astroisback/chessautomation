@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Chess Automata",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "An autonomous, human-like chess player for Chess.com. Features dynamic delays, auto-queueing, simulated pre-moves, and custom accuracy control.",
-  "permissions": ["storage"],
+  "permissions": ["storage", "tabs"],
   "host_permissions": ["https://*.chess.com/*", "http://100.86.25.112:8000/*"],
   "background": {
     "service_worker": "background.js"
@@ -11,7 +11,7 @@
   "content_scripts": [
     {
       "matches": ["https://*.chess.com/*"],
-      "js": ["content.js"],
+      "js": ["content.js", "floating-panel.js"],
       "run_at": "document_idle"
     }
   ],
@@ -20,3 +20,4 @@
     "default_title": "Chess Automata"
   }
 }
+
