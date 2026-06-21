@@ -1042,6 +1042,16 @@ function handleBoardUpdate() {
     // Generate fresh human personality for this game
     humanProfile.currentPersonality = generateGamePersonality();
 
+    // Auto-randomize thinking speed for the match if enabled
+    chrome.storage.local.get({ autoRandomizeSpeed: false }, (res) => {
+      if (res.autoRandomizeSpeed) {
+        // Random base speed between 1.5s and 5.0s
+        const newSpeed = (1.5 + Math.random() * 3.5).toFixed(2);
+        chrome.storage.local.set({ thinkingSpeed: parseFloat(newSpeed) });
+        console.log(`[Automata] Auto-Randomized thinking speed for this match: ${newSpeed}s`);
+      }
+    });
+
     chrome.runtime
       .sendMessage({
         action: 'gameStarted',

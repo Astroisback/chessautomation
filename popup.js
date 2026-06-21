@@ -6,6 +6,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const accuracySlider = document.getElementById('targetAccuracy');
   const premoveSlider = document.getElementById('premoveProb');
   const speedSlider = document.getElementById('thinkingSpeed');
+  const autoRandomizeToggle = document.getElementById('autoRandomizeSpeed');
   const engineUrlInput = document.getElementById('engineUrl');
 
   const accuracyVal = document.getElementById('accuracyVal');
@@ -29,7 +30,8 @@ document.addEventListener('DOMContentLoaded', () => {
     engineUrl: 'http://100.86.25.112:8000/move',
     targetAccuracy: 80,
     premoveProb: 20,
-    thinkingSpeed: 3.5
+    thinkingSpeed: 3.5,
+    autoRandomizeSpeed: false
   };
 
   function updateAccuracyVisibility(humanMode) {
@@ -57,6 +59,14 @@ document.addEventListener('DOMContentLoaded', () => {
     
     speedSlider.value = settings.thinkingSpeed;
     speedVal.textContent = `${settings.thinkingSpeed}s`;
+
+    if (autoRandomizeToggle) {
+      autoRandomizeToggle.checked = settings.autoRandomizeSpeed;
+      speedSlider.disabled = settings.autoRandomizeSpeed;
+      if (settings.autoRandomizeSpeed) {
+        speedSlider.style.opacity = '0.5';
+      }
+    }
 
     updateAccuracyVisibility(settings.humanMode);
   });
@@ -102,6 +112,14 @@ document.addEventListener('DOMContentLoaded', () => {
   speedSlider.addEventListener('change', () => {
     chrome.storage.local.set({ thinkingSpeed: parseFloat(speedSlider.value) });
   });
+
+  if (autoRandomizeToggle) {
+    autoRandomizeToggle.addEventListener('change', () => {
+      chrome.storage.local.set({ autoRandomizeSpeed: autoRandomizeToggle.checked });
+      speedSlider.disabled = autoRandomizeToggle.checked;
+      speedSlider.style.opacity = autoRandomizeToggle.checked ? '0.5' : '1.0';
+    });
+  }
 
   // ============================================================
   // ELO CLIMB PLANNER
