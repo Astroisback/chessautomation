@@ -13,6 +13,7 @@ let mutationObserver = null;
 let observedBoardEl = null;
 let lastBoardState = null;
 let lastGameOverCheck = 0;
+let moveRetryCount = 0;
 
 // ============================================================
 // HUMAN PROFILE SYSTEM — Realistic play simulation
@@ -238,10 +239,12 @@ const STARTING_BOARD = {
 };
 
 function updateSystemStatus(status, statusText) {
+  // Always show which color we're playing when a game is active
+  const colorTag = gameInProgress ? (ourColor === 'w' ? 'Playing as White | ' : 'Playing as Black | ') : '';
   chrome.runtime
     .sendMessage({
       action: "updateStatus",
-      data: { status, statusText },
+      data: { status, statusText: colorTag + statusText },
     })
     .catch(() => {});
 }
@@ -482,10 +485,16 @@ async function executeMove(moveStr) {
     const toSquare = moveStr.substring(2, 4);
     const promotionType = moveStr.length > 4 ? moveStr[4] : null;
 
-    // Perform "Click-to-Move" (100% reliable across devices if enabled on chess.com)
-    clickSquare(fromSquare, isFlipped);
-    await new Promise((r) => setTimeout(r, 200));
-    clickSquare(toSquare, isFlipped);
+    if (moveRetryCount > 0) {
+      // Retries use drag-and-drop (works even when click-to-move is disabled)
+      console.log(`[Automata] Retry #${moveRetryCount}: using drag-and-drop for ${moveStr}`);
+      await dispatchDragAndDrop(fromSquare, toSquare, isFlipped);
+    } else {
+      // First attempt: click-to-move
+      clickSquare(fromSquare, isFlipped);
+      await new Promise((r) => setTimeout(r, 200));
+      clickSquare(toSquare, isFlipped);
+    }
 
     if (promotionType) {
       await new Promise((r) => setTimeout(r, 400));
@@ -500,6 +509,22 @@ async function executeMove(moveStr) {
   } finally {
     setTimeout(() => {
       isMakingMove = false;
+      // Verify the move actually registered on the board.
+      // If the click failed silently, activeColor will still be ourColor.
+      setTimeout(() => {
+        if (gameInProgress && !isMakingMove && activeColor === ourColor) {
+          moveRetryCount++;
+          if (moveRetryCount <= 3) {
+            console.log(`[Automata] Move click appears to have failed (board unchanged). Retry ${moveRetryCount}/3...`);
+            updateSystemStatus('thinking', `Move Failed, Retrying (${moveRetryCount}/3)...`);
+            processTurn();
+          } else {
+            console.log('[Automata] Move failed after 3 retries. Waiting for manual intervention.');
+            updateSystemStatus('error', 'Move Failed - Check Board');
+            moveRetryCount = 0;
+          }
+        }
+      }, 3000);
     }, 800);
   }
 }
@@ -777,6 +802,8 @@ function handleAutoQueue() {
 
   autoQueueTimeout = setTimeout(() => {
     autoQueueTimeout = null;
+    // Don't queue if a game is currently in progress (prevents false game-over triggers)
+    if (gameInProgress) return;
     chrome.storage.local.get({ autoQueue: true }, (settings) => {
       if (!settings.autoQueue) return;
 
@@ -1010,6 +1037,8 @@ function handleBoardUpdate() {
     activeColor = 'w';
     moveHistory = [];
     
+    updateSystemStatus('running', `Playing as ${ourColor === 'w' ? 'White ♙' : 'Black ♟'}`);
+    
     // Generate fresh human personality for this game
     humanProfile.currentPersonality = generateGamePersonality();
 
@@ -1043,6 +1072,7 @@ function handleBoardUpdate() {
       if (movePlayed) {
         moveHistory.push(movePlayed);
         activeColor = ourColor;
+        moveRetryCount = 0; // Opponent moved, so our previous move succeeded
         saveGameState();
         lastBoardState = Object.assign({}, boardState);
         processTurn();
@@ -1149,6 +1179,22 @@ function startLifecycle() {
   setInterval(() => {
     if (gameInProgress && !isMakingMove) {
       if (isGameOver()) return;
+
+      // Auto-Recovery: If the DOM clock says it's our turn, but we think we are waiting,
+      // it means a move diff was missed (e.g. castling). Resync state from DOM!
+      const domActive = detectActiveColorFromDOM();
+      if (domActive === ourColor && activeColor !== ourColor) {
+        console.log("[Automata] State out of sync! Re-syncing from DOM...");
+        const newHistory = parseDOMMoveHistory();
+        if (newHistory.length > 0) {
+          moveHistory = newHistory;
+          activeColor = ourColor;
+          lastBoardState = parseBoardDOM();
+          processTurn();
+          return;
+        }
+      }
+
       handleBoardUpdate();
     }
   }, 500);
