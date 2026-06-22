@@ -14,6 +14,8 @@ let observedBoardEl = null;
 let lastBoardState = null;
 let lastGameOverCheck = 0;
 let moveRetryCount = 0;
+let recoveryLog = []; // Tracks all auto-recovery and force-recover attempts
+let autoQueueInProgress = false; // Suppresses board observer during auto-queue navigation
 
 // ============================================================
 // HUMAN PROFILE SYSTEM — Realistic play simulation
@@ -185,11 +187,78 @@ function detectCurrentElo() {
   return null;
 }
 
-// Listen for messages from popup (ELO detection request)
+// ============================================================
+// RECOVERY & DIAGNOSTICS
+// ============================================================
+function forceRecoverBot(reason) {
+  const timestamp = new Date().toLocaleTimeString();
+  const logEntry = `[${timestamp}] ${reason || 'Manual Force Recover'}` ;
+  recoveryLog.unshift(logEntry); // newest first
+  if (recoveryLog.length > 10) recoveryLog.pop(); // keep last 10
+
+  console.log(`[Automata Recovery] ${logEntry}`);
+  updateSystemStatus('thinking', 'Force Recovering...');
+
+  // Reset all volatile state
+  gameInProgress = false;
+  isMakingMove = false;
+  moveRetryCount = 0;
+  autoQueueTimeout = null;
+
+  // Disconnect and reconnect observer
+  if (mutationObserver) {
+    mutationObserver.disconnect();
+    mutationObserver = null;
+    observedBoardEl = null;
+  }
+
+  // Wait 1.5s then try to re-attach to the current board state
+  setTimeout(() => {
+    const boardEl = document.querySelector('chess-board') || document.querySelector('wc-chess-board');
+    if (boardEl) {
+      setupBoardObserver();
+      const boardState = parseBoardDOM();
+      if (boardState && Object.keys(boardState).length > 2) {
+        if (isStartingPosition(boardState)) {
+          // Game hasn't started yet — wait for it
+          updateSystemStatus('running', 'Recovered — Waiting for Game Start');
+        } else {
+          tryStartMidGame(boardState);
+          updateSystemStatus('running', 'Recovered — Rejoined Active Game');
+        }
+      } else {
+        updateSystemStatus('idle', 'Recovered — No Active Board');
+      }
+    } else {
+      updateSystemStatus('idle', 'Recovered — No Board Found');
+    }
+  }, 1500);
+}
+
+// Listen for messages from popup
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'detectElo') {
     const elo = detectCurrentElo();
     sendResponse({ elo: elo });
+    return true;
+  }
+
+  if (message.action === 'forceRecover') {
+    forceRecoverBot('Manual: Force Recover button clicked');
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  if (message.action === 'getBotState') {
+    sendResponse({
+      gameInProgress,
+      ourColor,
+      activeColor,
+      moveCount: moveHistory.length,
+      isMakingMove,
+      moveRetryCount,
+      recoveryLog,
+    });
     return true;
   }
 });
@@ -312,14 +381,24 @@ function isStartingPosition(boardState) {
   return keys.every((key) => boardState[key] === STARTING_BOARD[key]);
 }
 
-function findButtonByText(text) {
+function findButtonByText(text, options = {}) {
+  const { excludeNav = false, minWidth = 0 } = options;
   const buttons = Array.from(
     document.querySelectorAll('button, a, div[role="button"]'),
   );
   return buttons.find((b) => {
     const btnText = b.textContent || b.innerText || "";
     const isVisible = b.offsetWidth > 0 || b.offsetHeight > 0;
-    return isVisible && btnText.toLowerCase().trim().includes(text.toLowerCase());
+    if (!isVisible) return false;
+    if (!btnText.toLowerCase().trim().includes(text.toLowerCase())) return false;
+    // Optionally exclude small nav links (sidebar "Play" link is narrow)
+    if (excludeNav && b.offsetWidth < minWidth) return false;
+    // Exclude sidebar navigation items by checking common chess.com nav selectors
+    if (excludeNav) {
+      const isNav = b.closest('nav, .nav, [class*="sidebar"], [class*="left-nav"], [class*="nav-menu"], [class*="nav-link"]');
+      if (isNav) return false;
+    }
+    return true;
   });
 }
 
@@ -519,9 +598,10 @@ async function executeMove(moveStr) {
             updateSystemStatus('thinking', `Move Failed, Retrying (${moveRetryCount}/3)...`);
             processTurn();
           } else {
-            console.log('[Automata] Move failed after 3 retries. Waiting for manual intervention.');
-            updateSystemStatus('error', 'Move Failed - Check Board');
+            console.log('[Automata] Move failed after 3 retries. Triggering auto-recovery...');
+            updateSystemStatus('error', 'Move Failed — Auto-Recovering...');
             moveRetryCount = 0;
+            forceRecoverBot('Auto-recovery: move failed after 3 retries');
           }
         }
       }, 3000);
@@ -807,25 +887,84 @@ function handleAutoQueue() {
     chrome.storage.local.get({ autoQueue: true }, (settings) => {
       if (!settings.autoQueue) return;
 
-      const playAgainBtn =
-        findButtonByText("Play Again") ||
-        findButtonByText("Next Game") ||
-        findButtonByText("New 10 min") ||
-        findButtonByText("Play");
-      if (playAgainBtn) {
-        playAgainBtn.click();
-        updateSystemStatus("running", "Queueing Match...");
+      updateSystemStatus("running", "Queueing Match...");
+      autoQueueInProgress = true; // Suppress board observer during navigation
+      // Save intent to queue, then navigate to the play page directly
+      sessionStorage.setItem("automata_autoqueue", "true");
+      // Navigate to /play/online directly instead of reloading — this lands us
+      // on the matchmaking page where the "Play" button is immediately available.
+      const targetUrl = 'https://www.chess.com/play/online';
+      if (window.location.href.includes('/play/online')) {
+        window.location.reload();
       } else {
-        const newGameBtn = document.querySelector(
-          'button[data-cy="new-game-button"], .game-over-buttons-play-again',
-        );
-        if (newGameBtn) {
-          newGameBtn.click();
-          updateSystemStatus("running", "Queueing Match...");
-        }
+        window.location.href = targetUrl;
       }
     });
   }, queueDelay);
+}
+
+// Check for pending queue after a refresh
+if (sessionStorage.getItem("automata_autoqueue") === "true") {
+  sessionStorage.removeItem("automata_autoqueue");
+  autoQueueInProgress = true; // Keep board observer suppressed until we click Play
+
+  // Wait 5 seconds for DOM to settle after reload/navigation
+  setTimeout(() => {
+    console.log("[Automata AutoQueue] Post-reload: looking for Play button...");
+    updateSystemStatus("running", "Looking for Play button...");
+
+    // Retry loop: poll every 1.5 seconds for up to 25 attempts (~37 seconds)
+    let attempts = 0;
+    const maxAttempts = 25;
+    const retryInterval = setInterval(() => {
+      attempts++;
+
+      // Look for game-start buttons — avoid matching the sidebar "Play" nav link.
+      // Prioritize specific buttons first, then fall back to generic "Play" with nav exclusion.
+      const playBtn =
+        findButtonByText("Play Again") ||
+        findButtonByText("New Game") ||
+        findButtonByText("Next Game") ||
+        findButtonByText("New 10 min") ||
+        findButtonByText("New 5 min") ||
+        findButtonByText("New 3 min") ||
+        findButtonByText("New 1 min") ||
+        findButtonByText("Start Game") ||
+        document.querySelector(
+          'button[data-cy="new-game-index-button"], button[data-cy="new-game-button"], ' +
+          'button[data-cy="play-button"], .game-over-buttons-play-again'
+        ) ||
+        // Look for a large primary "Play" button (not the sidebar nav link)
+        document.querySelector(
+          '.ui_v5-button-primary, .ui_v5-button-large, ' +
+          'button.ui_v5-button-component.ui_v5-button-primary'
+        ) ||
+        findButtonByText("Play", { excludeNav: true, minWidth: 80 });
+
+      if (playBtn) {
+        clearInterval(retryInterval);
+        console.log(`[Automata AutoQueue] Found Play button after ${attempts} attempt(s): "${(playBtn.textContent || '').trim().substring(0, 30)}". Clicking.`);
+        playBtn.click();
+        updateSystemStatus("running", "Queueing Match...");
+        // Release the board observer suppression after a short delay
+        // to let chess.com transition to the game board.
+        setTimeout(() => {
+          autoQueueInProgress = false;
+          console.log("[Automata AutoQueue] Released board observer suppression.");
+        }, 5000);
+        return;
+      }
+
+      if (attempts >= maxAttempts) {
+        clearInterval(retryInterval);
+        autoQueueInProgress = false;
+        console.warn("[Automata AutoQueue] Could not find Play button after ~37 seconds. Giving up.");
+        updateSystemStatus("idle", "AutoQueue Failed — No Play Button Found");
+      } else {
+        console.log(`[Automata AutoQueue] Play button not found yet (attempt ${attempts}/${maxAttempts})...`);
+      }
+    }, 1500);
+  }, 5000);
 }
 
 async function processTurn() {
@@ -839,8 +978,15 @@ async function processTurn() {
       targetAccuracy: 80,
       premoveProb: 20,
       thinkingSpeed: 3.5,
+      autoRandomizeSpeed: false,
     },
     async (settings) => {
+      // Auto-randomize thinking speed PER MOVE if enabled
+      if (settings.autoRandomizeSpeed) {
+        settings.thinkingSpeed = 1.5 + Math.random() * 3.5;
+        chrome.storage.local.set({ thinkingSpeed: parseFloat(settings.thinkingSpeed.toFixed(2)) });
+      }
+
       if (!settings.autoPlay) {
         updateSystemStatus('running', 'Auto-Play Disabled');
         return;
@@ -958,29 +1104,540 @@ function detectActiveColorFromDOM() {
   return null;
 }
 
-// Try to read UCI moves already stored in chess.com's DOM (data-uci attribute).
+// Try to read UCI moves from chess.com's DOM using multiple fallback strategies.
 function parseDOMMoveHistory() {
-  const moves = [];
+  let moves = [];
+
+  // ── Strategy 1: data-uci attributes (original, fastest) ──
   document.querySelectorAll("[data-uci]").forEach((el) => {
     const uci = el.getAttribute("data-uci");
     if (uci && /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(uci)) moves.push(uci);
   });
-  return moves;
+  if (moves.length > 0) {
+    console.log(`[Automata MoveHistory] Strategy 1 (data-uci): found ${moves.length} moves`);
+    return moves;
+  }
+
+  // ── Strategy 2: chess.com web-component internal game object ──
+  try {
+    const boardEl = document.querySelector('wc-chess-board') || document.querySelector('chess-board');
+    if (boardEl) {
+      // Try direct .game property
+      const game = boardEl.game;
+      if (game) {
+        // chess.com stores moves in various internal formats
+        const historyMethods = ['getHistory', 'getMoveList', 'getMoves', 'history'];
+        for (const method of historyMethods) {
+          if (typeof game[method] === 'function') {
+            const history = game[method]({ verbose: true });
+            if (Array.isArray(history) && history.length > 0) {
+              for (const m of history) {
+                if (typeof m === 'string' && /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(m)) {
+                  moves.push(m);
+                } else if (m && m.from && m.to) {
+                  moves.push(m.from + m.to + (m.promotion || ''));
+                } else if (m && m.uci) {
+                  moves.push(m.uci);
+                }
+              }
+              break;
+            }
+          }
+          // Also try as a property (not function)
+          if (Array.isArray(game[method]) && game[method].length > 0) {
+            for (const m of game[method]) {
+              if (typeof m === 'string' && /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(m)) {
+                moves.push(m);
+              } else if (m && m.from && m.to) {
+                moves.push(m.from + m.to + (m.promotion || ''));
+              }
+            }
+            if (moves.length > 0) break;
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.log('[Automata MoveHistory] Strategy 2 (game object) failed:', e.message);
+  }
+  if (moves.length > 0) {
+    console.log(`[Automata MoveHistory] Strategy 2 (game object): found ${moves.length} moves`);
+    return moves;
+  }
+
+  // ── Strategy 3: Broader DOM selectors (shadow root, data-ply, move-node) ──
+  const broadSelectors = [
+    '.move-node[data-uci]',
+    '.main-line-ply[data-uci]',
+    '.move[data-uci]',
+    '[data-ply][data-uci]',
+    '.vertical-move-list [data-uci]',
+    '.move-list [data-uci]',
+  ];
+  for (const sel of broadSelectors) {
+    const els = document.querySelectorAll(sel);
+    els.forEach((el) => {
+      const uci = el.getAttribute('data-uci');
+      if (uci && /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(uci)) moves.push(uci);
+    });
+    if (moves.length > 0) break;
+  }
+
+  // Also try inside shadow root
+  if (moves.length === 0) {
+    const boardEl = document.querySelector('wc-chess-board') || document.querySelector('chess-board');
+    if (boardEl && boardEl.shadowRoot) {
+      boardEl.shadowRoot.querySelectorAll('[data-uci]').forEach((el) => {
+        const uci = el.getAttribute('data-uci');
+        if (uci && /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(uci)) moves.push(uci);
+      });
+    }
+  }
+  if (moves.length > 0) {
+    console.log(`[Automata MoveHistory] Strategy 3 (broad selectors): found ${moves.length} moves`);
+    return moves;
+  }
+
+  // ── Strategy 4: Parse SAN move text → replay on lightweight board to get UCI ──
+  try {
+    moves = parseSANMovesFromDOM();
+    if (moves.length > 0) {
+      console.log(`[Automata MoveHistory] Strategy 4 (SAN replay): found ${moves.length} moves`);
+      return moves;
+    }
+  } catch (e) {
+    console.log('[Automata MoveHistory] Strategy 4 (SAN replay) failed:', e.message);
+  }
+
+  console.warn('[Automata MoveHistory] All strategies failed. Returning empty array.');
+  return [];
+}
+
+// ── SAN text scraper + lightweight board replay ──
+// Reads chess.com's move list text and converts SAN → UCI using a simple board tracker.
+// Handles chess.com's figurine notation where pieces are rendered via icon-font spans.
+function parseSANMovesFromDOM() {
+  const sanMoves = [];
+
+  // ── Approach A: Find individual move nodes and extract SAN from each ──
+  const moveNodeSelectors = [
+    // chess.com v1 (classic)
+    '.white.node, .black.node',
+    // chess.com v2 (newer)
+    '.main-line-ply',
+    '.move-text-component',
+    // chess.com v3 (latest)
+    '.move-node',
+    '[data-ply]:not([data-whole-move-number])',
+    '.node:not(.move-number)',
+  ];
+
+  for (const sel of moveNodeSelectors) {
+    const els = document.querySelectorAll(sel);
+    if (els.length < 2) continue;
+
+    console.log(`[Automata SAN] Trying selector '${sel}' → found ${els.length} elements`);
+
+    els.forEach((el) => {
+      const san = extractSANFromElement(el);
+      if (san && san.length >= 2 && san.length <= 7) {
+        sanMoves.push(san);
+      }
+    });
+
+    if (sanMoves.length > 0) {
+      console.log(`[Automata SAN] Selector '${sel}' yielded ${sanMoves.length} SAN moves:`, sanMoves.slice(0, 15));
+      break;
+    }
+  }
+
+  // ── Approach B: If no individual nodes found, try the entire move list text ──
+  if (sanMoves.length === 0) {
+    const listSelectors = [
+      '.move-list',
+      '.vertical-move-list',
+      '.moves-container',
+      '[class*="move-list"]',
+    ];
+
+    for (const sel of listSelectors) {
+      const listEl = document.querySelector(sel);
+      if (!listEl) continue;
+
+      const fullText = (listEl.textContent || '').trim();
+      if (fullText.length < 4) continue;
+
+      console.log(`[Automata SAN] Trying full text parse from '${sel}'`);
+      
+      // Parse "1. d4 d5 2. e3 Nf6 3. Bb5+ c6 ..." format
+      const movePattern = /(?:\d+\.\s*)?([KQRBN]?[a-h]?[1-8]?x?[a-h][1-8](?:=[QRBN])?[+#]?|O-O-O|O-O|0-0-0|0-0)/g;
+      let match;
+      while ((match = movePattern.exec(fullText)) !== null) {
+        let san = match[1].replace(/[+#]/g, '').trim();
+        if (san.length >= 2) sanMoves.push(san);
+      }
+
+      if (sanMoves.length > 0) {
+        console.log(`[Automata SAN] Full text parse yielded ${sanMoves.length} moves:`, sanMoves.slice(0, 15));
+        break;
+      }
+    }
+  }
+
+  if (sanMoves.length === 0) {
+    console.log('[Automata SAN] Could not find any SAN moves in the DOM.');
+    return [];
+  }
+
+  // Replay on a lightweight board to convert SAN → UCI
+  return replaySANtoUCI(sanMoves);
+}
+
+// Extract SAN notation from a single move element, handling:
+// - Icon-font piece symbols (chess.com renders ♞ via <span class="icon-font-chess wn">)
+// - Unicode chess symbols (♔♕♖♗♘ etc.)
+// - Plain text SAN ("Nf3", "e4")
+function extractSANFromElement(el) {
+  // Skip move number labels
+  const rawText = (el.textContent || '').trim();
+  if (/^\d+\.?\s*$/.test(rawText)) return null;
+
+  // Step 1: Check for icon-font piece notation in child elements
+  let pieceLetter = '';
+  const iconEl = el.querySelector(
+    '[class*="icon-font-chess"], [class*="figurine"], [class*="piece-icon"], ' +
+    '[data-figurine], [class*="chess-piece"]'
+  );
+
+  if (iconEl) {
+    const classes = (iconEl.className || '') + ' ' + (iconEl.getAttribute('data-figurine') || '');
+    const cl = classes.toLowerCase();
+    
+    if (cl.includes('knight') || /\b[wb]n\b/.test(cl)) pieceLetter = 'N';
+    else if (cl.includes('bishop') || /\b[wb]b\b/.test(cl)) pieceLetter = 'B';
+    else if (cl.includes('rook') || /\b[wb]r\b/.test(cl)) pieceLetter = 'R';
+    else if (cl.includes('queen') || /\b[wb]q\b/.test(cl)) pieceLetter = 'Q';
+    else if (cl.includes('king') || /\b[wb]k\b/.test(cl)) pieceLetter = 'K';
+    // Pawns don't get a letter prefix
+  }
+
+  // Step 2: Build move text from child nodes, skipping icon elements
+  let coords = '';
+  function walkNodes(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      coords += node.textContent;
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      const cn = (node.className || '').toLowerCase();
+      // Skip icon-font elements (we already extracted the piece letter)
+      if (cn.includes('icon-font') || cn.includes('figurine') || cn.includes('piece-icon')) {
+        return;
+      }
+      // Skip move number spans
+      if (cn.includes('move-number') || cn.includes('moveNumber')) {
+        return;
+      }
+      node.childNodes.forEach(walkNodes);
+    }
+  }
+  el.childNodes.forEach(walkNodes);
+  coords = coords.trim();
+
+  // Step 3: Handle unicode chess piece symbols that might be in the text
+  const unicodeMap = {
+    '♔': 'K', '♕': 'Q', '♖': 'R', '♗': 'B', '♘': 'N', '♙': '',
+    '♚': 'K', '♛': 'Q', '♜': 'R', '♝': 'B', '♞': 'N', '♟': '',
+    '\u265A': 'K', '\u265B': 'Q', '\u265C': 'R', '\u265D': 'B', '\u265E': 'N', '\u265F': '',
+    '\u2654': 'K', '\u2655': 'Q', '\u2656': 'R', '\u2657': 'B', '\u2658': 'N', '\u2659': '',
+  };
+
+  for (const [sym, letter] of Object.entries(unicodeMap)) {
+    if (coords.includes(sym)) {
+      if (!pieceLetter && letter) pieceLetter = letter;
+      coords = coords.replace(sym, '');
+    }
+  }
+
+  // Step 4: Clean up the coordinates
+  coords = coords.replace(/^\d+\.\s*/, ''); // remove move number
+  coords = coords.replace(/[+#!?]+/g, '');   // remove annotations
+  coords = coords.replace(/\s+/g, '');        // remove whitespace
+  coords = coords.trim();
+
+  if (!coords) return null;
+
+  // Handle castling
+  if (coords === 'O-O' || coords === '0-0') return 'O-O';
+  if (coords === 'O-O-O' || coords === '0-0-0') return 'O-O-O';
+
+  // Combine: piece letter + coordinates
+  const san = pieceLetter + coords;
+  return san;
+}
+
+// Minimal board tracker: just piece placement (no full chess rules engine).
+// Handles standard moves, captures, castling, pawn promotion, en passant.
+function replaySANtoUCI(sanMoves) {
+  const FILES = 'abcdefgh';
+  const board = {}; // sq → 'wp', 'bk', etc.
+
+  // Initialize board from STARTING_BOARD (defined globally)
+  for (const sq in STARTING_BOARD) {
+    board[sq] = STARTING_BOARD[sq];
+  }
+
+  const pieceMap = { K: 'k', Q: 'q', R: 'r', B: 'b', N: 'n' };
+  const uciMoves = [];
+  let colorToMove = 'w';
+
+  for (const san of sanMoves) {
+    const uci = sanToUCI(san, board, colorToMove, FILES, pieceMap);
+    if (!uci) {
+      console.warn(`[Automata SAN→UCI] Could not convert: "${san}" (move #${uciMoves.length + 1}). Stopping.`);
+      break; // Stop on first failure — partial history is better than garbage
+    }
+
+    // Apply the move to the board
+    applyUCItoBoard(uci, board, colorToMove);
+    uciMoves.push(uci);
+    colorToMove = colorToMove === 'w' ? 'b' : 'w';
+  }
+
+  return uciMoves;
+}
+
+function sanToUCI(san, board, color, FILES, pieceMap) {
+  // Handle castling
+  if (san === 'O-O' || san === '0-0') {
+    const rank = color === 'w' ? '1' : '8';
+    return `e${rank}g${rank}`;
+  }
+  if (san === 'O-O-O' || san === '0-0-0') {
+    const rank = color === 'w' ? '1' : '8';
+    return `e${rank}c${rank}`;
+  }
+
+  // Strip annotations
+  let s = san.replace(/[+#!?=]/g, '').trim();
+  if (!s) return null;
+
+  // Promotion: e.g. "e8Q" or "exd8Q" or "e8=Q"
+  let promotion = '';
+  const promoMatch = s.match(/([qrbnQRBN])$/);
+  if (promoMatch) {
+    const lastChar = promoMatch[1];
+    // Check if this is actually a promotion (pawn reaching last rank)
+    // by seeing if the char before it is a rank '1' or '8'
+    const beforePromo = s.slice(0, -1);
+    if (beforePromo.length >= 2) {
+      const destRank = beforePromo[beforePromo.length - 1];
+      if (destRank === '8' || destRank === '1') {
+        promotion = lastChar.toLowerCase();
+        s = beforePromo;
+      }
+    }
+  }
+
+  // Pawn move: starts with lowercase letter or is just coords like "e4"
+  const firstChar = s[0];
+  if (firstChar === firstChar.toLowerCase() && FILES.includes(firstChar)) {
+    // Pawn move
+    const isCapture = s.includes('x');
+    s = s.replace('x', '');
+
+    if (s.length === 2) {
+      // Simple pawn push: e.g. "e4"
+      const toSq = s;
+      const toFile = toSq[0];
+      const toRank = parseInt(toSq[1]);
+
+      // Find the pawn that could move here
+      let fromSq = null;
+      if (color === 'w') {
+        // Try one square back
+        const oneBack = toFile + (toRank - 1);
+        if (board[oneBack] === 'wp') fromSq = oneBack;
+        // Try two squares back (from rank 2)
+        if (!fromSq && toRank === 4) {
+          const twoBack = toFile + '2';
+          if (board[twoBack] === 'wp' && !board[toFile + '3']) fromSq = twoBack;
+        }
+      } else {
+        const oneBack = toFile + (toRank + 1);
+        if (board[oneBack] === 'bp') fromSq = oneBack;
+        if (!fromSq && toRank === 5) {
+          const twoBack = toFile + '7';
+          if (board[twoBack] === 'bp' && !board[toFile + '6']) fromSq = twoBack;
+        }
+      }
+      return fromSq ? fromSq + toSq + promotion : null;
+    }
+
+    if (s.length === 3 && isCapture) {
+      // Pawn capture: e.g. "ed5" (from e-file captures to d5)
+      const fromFile = firstChar;
+      const toSq = s.substring(1);
+      const toRank = parseInt(toSq[1]);
+
+      // Find pawn on the from file that can capture
+      const expectedRank = color === 'w' ? toRank - 1 : toRank + 1;
+      const fromSq = fromFile + expectedRank;
+      if (board[fromSq] === color + 'p') {
+        return fromSq + toSq + promotion;
+      }
+      return null;
+    }
+
+    // Edge case: "exd5" was already handled (x stripped, leaving "ed5")
+    return null;
+  }
+
+  // Piece move: starts with uppercase
+  if (!pieceMap[firstChar]) return null;
+  const pieceType = pieceMap[firstChar];
+  const target = color + pieceType;
+
+  let rest = s.substring(1).replace('x', '');
+  // rest could be: "f3", "1f3" (disambiguation by rank), "gf3" (disambiguation by file), "g1f3" (full disambiguation)
+
+  if (rest.length < 2) return null;
+  const toSq = rest.slice(-2);
+  const disambig = rest.slice(0, -2);
+
+  // Find all pieces of this type belonging to color
+  const candidates = [];
+  for (const sq in board) {
+    if (board[sq] === target) {
+      if (canPieceReach(pieceType, sq, toSq, board, FILES)) {
+        candidates.push(sq);
+      }
+    }
+  }
+
+  if (candidates.length === 0) return null;
+
+  if (candidates.length === 1) {
+    return candidates[0] + toSq + promotion;
+  }
+
+  // Disambiguate
+  for (const cand of candidates) {
+    if (disambig.length === 2 && cand === disambig) return cand + toSq + promotion;
+    if (disambig.length === 1) {
+      if (FILES.includes(disambig) && cand[0] === disambig) return cand + toSq + promotion;
+      if (/[1-8]/.test(disambig) && cand[1] === disambig) return cand + toSq + promotion;
+    }
+  }
+
+  // Last resort: return first candidate
+  return candidates[0] + toSq + promotion;
+}
+
+function canPieceReach(piece, from, to, board, FILES) {
+  const ff = FILES.indexOf(from[0]), fr = parseInt(from[1]);
+  const tf = FILES.indexOf(to[0]), tr = parseInt(to[1]);
+  const df = tf - ff, dr = tr - fr;
+  const adf = Math.abs(df), adr = Math.abs(dr);
+
+  if (piece === 'n') {
+    return (adf === 1 && adr === 2) || (adf === 2 && adr === 1);
+  }
+  if (piece === 'k') {
+    return adf <= 1 && adr <= 1;
+  }
+
+  // Sliding pieces: check path is clear
+  if (piece === 'b') {
+    if (adf !== adr || adf === 0) return false;
+    return isPathClear(from, to, df, dr, board, FILES);
+  }
+  if (piece === 'r') {
+    if (df !== 0 && dr !== 0) return false;
+    return isPathClear(from, to, df, dr, board, FILES);
+  }
+  if (piece === 'q') {
+    if (adf !== adr && df !== 0 && dr !== 0) return false;
+    return isPathClear(from, to, df, dr, board, FILES);
+  }
+  return false;
+}
+
+function isPathClear(from, to, df, dr, board, FILES) {
+  const ff = FILES.indexOf(from[0]), fr = parseInt(from[1]);
+  const steps = Math.max(Math.abs(df), Math.abs(dr));
+  const stepF = df === 0 ? 0 : df / Math.abs(df);
+  const stepR = dr === 0 ? 0 : dr / Math.abs(dr);
+
+  for (let i = 1; i < steps; i++) {
+    const sq = FILES[ff + stepF * i] + (fr + stepR * i);
+    if (board[sq]) return false; // blocked
+  }
+  return true;
+}
+
+function applyUCItoBoard(uci, board, color) {
+  const from = uci.substring(0, 2);
+  const to = uci.substring(2, 4);
+  const promo = uci.length > 4 ? uci[4] : null;
+
+  const piece = board[from];
+  delete board[from];
+
+  if (promo) {
+    board[to] = color + promo;
+  } else {
+    board[to] = piece;
+  }
+
+  // Handle castling rook
+  if (piece && piece[1] === 'k') {
+    const rank = color === 'w' ? '1' : '8';
+    if (from === 'e' + rank && to === 'g' + rank) {
+      board['f' + rank] = board['h' + rank];
+      delete board['h' + rank];
+    }
+    if (from === 'e' + rank && to === 'c' + rank) {
+      board['d' + rank] = board['a' + rank];
+      delete board['a' + rank];
+    }
+  }
+
+  // Handle en passant
+  if (piece && piece[1] === 'p' && from[0] !== to[0] && !board[to]) {
+    // Pawn moved diagonally to an empty square → en passant
+    delete board[to[0] + from[1]];
+  }
 }
 
 // Called when we find pieces on the board but didn't see the starting position.
 // Attempts to bootstrap the engine into an already-running game.
 function tryStartMidGame(boardState) {
+  // Don't try to start a game during auto-queue navigation
+  if (autoQueueInProgress) {
+    console.log('[Automata] Skipping tryStartMidGame — auto-queue in progress');
+    return;
+  }
+
   const pieceCount = Object.keys(boardState).length;
   if (pieceCount < 2) return;
 
-  // Clocks must be present to confirm this is a live game, not an analysis board.
-  if (
-    !document.querySelector(
-      '.clock-bottom, .clock-component, [class*="clock-"]',
-    )
-  )
-    return;
+  // Clocks must be present AND actively running to confirm this is a live game,
+  // not the lobby board or an analysis board. Chess.com shows clock elements on
+  // the /play page even when no game is active, so just checking for clock
+  // presence causes false positives.
+  const hasActiveClock = document.querySelector(
+    '.clock-player-turn, [class*="clock"][class*="player-turn"], ' +
+    '.clock-bottom.clock-player-turn, .clock-top.clock-player-turn'
+  );
+  if (!hasActiveClock) {
+    // Fallback: at least require both top and bottom clocks with actual time text
+    const clockBottom = document.querySelector('.clock-bottom, [class*="clock-bottom"]');
+    const clockTop = document.querySelector('.clock-top, [class*="clock-top"]');
+    if (!clockBottom || !clockTop) return;
+    const bottomText = (clockBottom.textContent || '').trim();
+    const topText = (clockTop.textContent || '').trim();
+    // Clocks should show time like "5:00" or "3:24" — if both are empty, this isn't a game
+    if (!bottomText.match(/\d+:\d+/) || !topText.match(/\d+:\d+/)) return;
+  }
 
   const boardEl =
     document.querySelector("chess-board") ||
@@ -1021,11 +1678,55 @@ function tryStartMidGame(boardState) {
   if (activeColor === ourColor) processTurn();
 }
 
+// Checks if a real game is actively being played (not just a lobby/matchmaking board).
+// Chess.com shows the board in starting position on the /play page BEFORE an opponent
+// is matched. This function distinguishes that from an actual live game.
+function isRealGameActive() {
+  // 1. Check for actively ticking clock (chess.com adds 'clock-player-turn' class)
+  const activeClock = document.querySelector(
+    '.clock-player-turn, [class*="clock"][class*="player-turn"]'
+  );
+  if (activeClock) return true;
+
+  // 2. Check if the opponent has a real username (not the placeholder "Opponent")
+  const opponentSelectors = [
+    '.board-player-default-top .user-tagline-username',
+    '.board-player-default-top [class*="username"]',
+    '[class*="player-top"] [class*="username"]',
+    '.player-top .user-tagline-component',
+  ];
+  for (const sel of opponentSelectors) {
+    const el = document.querySelector(sel);
+    if (el) {
+      const name = (el.textContent || '').trim().toLowerCase();
+      // "Opponent" is the chess.com placeholder before matchmaking completes
+      if (name && name !== 'opponent' && name.length > 1) return true;
+    }
+  }
+
+  // 3. Check if there's a move list with any moves (game has started)
+  const moveNodes = document.querySelectorAll('[data-ply], .main-line-ply, .move-node');
+  if (moveNodes.length > 0) return true;
+
+  return false;
+}
+
 function handleBoardUpdate() {
+  // Don't process board updates during auto-queue navigation
+  if (autoQueueInProgress) return;
+
   const boardState = parseBoardDOM();
   if (!boardState) return;
 
   if (isStartingPosition(boardState) && !gameInProgress) {
+    // CRITICAL: Don't start a game unless a real opponent is matched.
+    // Chess.com shows the board in starting position on the /play page
+    // while waiting for matchmaking. We must wait for an active clock
+    // or a real opponent username before treating this as a live game.
+    if (!isRealGameActive()) {
+      return; // Still in lobby/matchmaking — don't start yet
+    }
+
     gameInProgress = true;
     lastBoardState = Object.assign({}, boardState);
     lastGameOverCheck = 0;
@@ -1042,16 +1743,6 @@ function handleBoardUpdate() {
     // Generate fresh human personality for this game
     humanProfile.currentPersonality = generateGamePersonality();
 
-    // Auto-randomize thinking speed for the match if enabled
-    chrome.storage.local.get({ autoRandomizeSpeed: false }, (res) => {
-      if (res.autoRandomizeSpeed) {
-        // Random base speed between 1.5s and 5.0s
-        const newSpeed = (1.5 + Math.random() * 3.5).toFixed(2);
-        chrome.storage.local.set({ thinkingSpeed: parseFloat(newSpeed) });
-        console.log(`[Automata] Auto-Randomized thinking speed for this match: ${newSpeed}s`);
-      }
-    });
-
     chrome.runtime
       .sendMessage({
         action: 'gameStarted',
@@ -1059,7 +1750,13 @@ function handleBoardUpdate() {
       })
       .catch(() => {});
 
-    if (ourColor === 'w') processTurn();
+    if (ourColor === 'w') {
+      // Add a 1.5-second delay on the very first move to allow chess.com's 
+      // "Game Started" overlay animation to disappear before we try to click.
+      setTimeout(() => {
+        if (gameInProgress && activeColor === 'w') processTurn();
+      }, 1500);
+    }
     return;
   }
 
@@ -1166,6 +1863,8 @@ function setupBoardObserver() {
 }
 
 function startLifecycle() {
+  let idleBoardSeconds = 0;
+
   // Board presence check — set up or tear down the observer as needed
   setInterval(() => {
     const boardEl =
@@ -1180,6 +1879,30 @@ function startLifecycle() {
       observedBoardEl = null;
       gameInProgress = false;
       updateSystemStatus("idle", "System Idle");
+    }
+
+    // Blind Kickstart Hack: If board is present but game hasn't started for 4 seconds
+    // ONLY fire if a real game is active (opponent matched, clock running).
+    // Don't fire on the matchmaking/lobby screen!
+    if (boardEl && !gameInProgress && !autoQueueInProgress) {
+      idleBoardSeconds++;
+      if (idleBoardSeconds >= 4) {
+        // Verify a real game is happening before trying blind kickstart
+        if (isRealGameActive()) {
+          console.log("[Automata] Game stuck at start? Attempting blind kickstart moves...");
+          chrome.storage.local.get({ autoPlay: true }, (settings) => {
+            if (settings.autoPlay) {
+              executeMove("e2e4");
+              executeMove("e7e5");
+            }
+          });
+        } else {
+          console.log("[Automata] Board present but no real game detected (lobby/matchmaking). Skipping kickstart.");
+        }
+        idleBoardSeconds = 0;
+      }
+    } else {
+      idleBoardSeconds = 0;
     }
   }, 1000);
 

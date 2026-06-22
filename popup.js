@@ -266,4 +266,85 @@ document.addEventListener('DOMContentLoaded', () => {
       updateUIState(message.data);
     }
   });
+
+  // ============================================================
+  // BOT DIAGNOSTICS — Force Recover + Live State Panel
+  // ============================================================
+  const forceRecoverBtn = document.getElementById('forceRecoverBtn');
+  const diagGameState   = document.getElementById('diagGameState');
+  const diagColor       = document.getElementById('diagColor');
+  const diagMoves       = document.getElementById('diagMoves');
+  const recoveryLogEl   = document.getElementById('recoveryLog');
+
+  // Wire up Force Recover button
+  forceRecoverBtn.addEventListener('click', () => {
+    forceRecoverBtn.classList.add('recovering');
+    forceRecoverBtn.textContent = '⏳ Recovering...';
+
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (!tabs[0]) {
+        forceRecoverBtn.classList.remove('recovering');
+        forceRecoverBtn.textContent = '🔄 Force Recover';
+        return;
+      }
+      chrome.tabs.sendMessage(tabs[0].id, { action: 'forceRecover' }, () => {
+        setTimeout(() => {
+          forceRecoverBtn.classList.remove('recovering');
+          forceRecoverBtn.textContent = '🔄 Force Recover';
+        }, 2000);
+      });
+    });
+  });
+
+  // Update diagnostics panel from bot state
+  function updateDiagnostics(state) {
+    if (!state) return;
+
+    // Game state pill
+    if (state.gameInProgress) {
+      diagGameState.textContent = '🟢 In Game';
+      diagGameState.className = 'diag-pill active';
+    } else {
+      diagGameState.textContent = '⬛ Idle';
+      diagGameState.className = 'diag-pill';
+    }
+
+    // Color pill
+    if (state.ourColor) {
+      const colorLabel = state.ourColor === 'w' ? '♙ White' : '♟ Black';
+      diagColor.textContent = colorLabel;
+      diagColor.className = state.gameInProgress ? 'diag-pill active' : 'diag-pill';
+    }
+
+    // Moves pill
+    const retryStr = state.moveRetryCount > 0 ? ` ⚠ retry ${state.moveRetryCount}` : '';
+    diagMoves.textContent = `${state.moveCount} moves${retryStr}`;
+    diagMoves.className = state.moveRetryCount > 0 ? 'diag-pill error' : 'diag-pill';
+
+    // Recovery log
+    if (state.recoveryLog && state.recoveryLog.length > 0) {
+      recoveryLogEl.innerHTML = state.recoveryLog.map((entry) => {
+        const isAuto = entry.toLowerCase().includes('auto');
+        return `<div class="log-entry ${isAuto ? 'auto' : ''}">${entry}</div>`;
+      }).join('');
+    } else {
+      recoveryLogEl.innerHTML = '<span class="log-empty">No recoveries yet</span>';
+    }
+  }
+
+  // Poll bot state every 2 seconds while popup is open
+  function pollBotState() {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (!tabs[0]) return;
+      chrome.tabs.sendMessage(tabs[0].id, { action: 'getBotState' }, (response) => {
+        if (chrome.runtime.lastError) return; // tab not ready
+        updateDiagnostics(response);
+      });
+    });
+  }
+
+  // Run immediately on open, then every 2 seconds
+  pollBotState();
+  setInterval(pollBotState, 2000);
 });
+

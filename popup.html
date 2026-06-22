@@ -114,7 +114,7 @@
         
         <div class="toggle-control" style="margin-top: 12px; padding: 0; background: transparent;">
           <div class="control-label-group">
-            <span class="control-title" style="font-size: 0.9rem;">Auto-Randomize (per game)</span>
+            <span class="control-title" style="font-size: 0.9rem;">Auto-Randomize (per move)</span>
           </div>
           <label class="switch mini-switch">
             <input type="checkbox" id="autoRandomizeSpeed">
@@ -159,6 +159,31 @@
 
         <div class="elo-plan-summary" id="eloPlanSummary">
           <span class="plan-text">Win ~60% → gain ~5 ELO/game → reach <strong>1100</strong> in <strong>60</strong> games</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bot Diagnostics Section -->
+    <div class="settings-section diagnostics-section">
+      <div class="diag-header">
+        <h2>🤖 Bot Diagnostics</h2>
+        <button id="forceRecoverBtn" class="recover-btn" title="Force the bot to reset and rejoin the current game">
+          🔄 Force Recover
+        </button>
+      </div>
+
+      <!-- Live State Row -->
+      <div class="diag-state-row">
+        <div class="diag-pill" id="diagGameState">⬛ Idle</div>
+        <div class="diag-pill" id="diagColor">♙ —</div>
+        <div class="diag-pill" id="diagMoves">0 moves</div>
+      </div>
+
+      <!-- Recovery Log -->
+      <div class="recovery-log-container">
+        <div class="recovery-log-header">Recovery Log</div>
+        <div class="recovery-log" id="recoveryLog">
+          <span class="log-empty">No recoveries yet</span>
         </div>
       </div>
     </div>
