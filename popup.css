@@ -22,12 +22,36 @@
   user-select: none;
 }
 
+html {
+  /* Firefox popups need an explicit height cap so the body can scroll */
+  max-height: 600px;
+}
+
 body {
-  width: 320px;
+  width: 340px;
   background-color: var(--bg-primary);
   color: var(--text-primary);
   padding: 12px;
-  overflow: hidden;
+  /* Allow the popup to scroll with the wheel when content is tall */
+  max-height: 580px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(139, 92, 246, 0.5) transparent;
+}
+
+/* Custom scrollbar for the popup body */
+body::-webkit-scrollbar {
+  width: 8px;
+}
+
+body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+body::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+  border-radius: 10px;
 }
 
 /* Card layout container */
@@ -369,6 +393,31 @@ input:checked + .slider:before {
   box-shadow: 0 0 10px rgba(245, 158, 11, 0.4);
 }
 
+/* Must Win Toggle — danger styling so you don't leave it on accidentally */
+.must-win-toggle {
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.must-win-toggle:hover {
+  background: rgba(239, 68, 68, 0.10);
+}
+
+.must-win-title {
+  color: #fca5a5;
+}
+
+.must-win-switch input:checked + .slider {
+  background: linear-gradient(135deg, #ef4444, #b91c1c);
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.45);
+}
+
+/* Visually grey out Human Mode while Must Win is active */
+.toggle-control.disabled-by-mustwin {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 /* Hidden utility */
 .hidden {
   display: none !important;
@@ -497,8 +546,76 @@ input:checked + .slider:before {
 }
 
 /* ============================================================
-   Bot Diagnostics Section
+   Phase ELO Section
    ============================================================ */
+.phase-elo-section {
+  border-top: 1px solid rgba(96, 165, 250, 0.18);
+}
+
+.phase-elo-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.phase-elo-header h2 {
+  margin-bottom: 0;
+}
+
+.phase-elo-desc {
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  font-style: italic;
+  margin-bottom: 10px;
+}
+
+#phaseEloModeLabel {
+  color: #93c5fd;
+  font-weight: 500;
+}
+
+.phase-elo-hint {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(96, 165, 250, 0.07);
+  border: 1px solid rgba(96, 165, 250, 0.15);
+  font-size: 0.62rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+/* ============================================================
+   Match Breaks Section
+   ============================================================ */
+.breaks-section {
+  border-top: 1px solid rgba(139, 92, 246, 0.18);
+}
+
+.breaks-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.breaks-header h2 {
+  margin-bottom: 0;
+}
+
+.break-summary {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.08), rgba(59, 130, 246, 0.04));
+  border: 1px solid rgba(139, 92, 246, 0.15);
+}
+
+.break-summary .plan-text strong {
+  color: #a78bfa;
+  font-weight: 700;
+}
 .diagnostics-section {
   border-top: 1px solid rgba(239, 68, 68, 0.18);
 }

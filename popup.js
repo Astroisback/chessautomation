@@ -13,6 +13,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const premoveVal = document.getElementById('premoveVal');
   const speedVal = document.getElementById('speedVal');
 
+  const mustWinToggle = document.getElementById('mustWin');
+  const humanModeRow = humanModeToggle ? humanModeToggle.closest('.toggle-control') : null;
+
   const statusBanner = document.getElementById('statusBanner');
   const statusPulse = document.getElementById('statusPulse');
   const statusText = document.getElementById('statusText');
@@ -27,12 +30,22 @@ document.addEventListener('DOMContentLoaded', () => {
     autoPlay: true,
     autoQueue: true,
     humanMode: true,
+    mustWin: false,
     engineUrl: 'http://100.86.25.112:8000/move',
     targetAccuracy: 80,
     premoveProb: 20,
     thinkingSpeed: 3.5,
     autoRandomizeSpeed: false
   };
+
+  function applyMustWinUI(enabled) {
+    // Visually disable Human Mode row while Must Win is on. The actual
+    // override happens in content.js (mustWin beats humanMode), but greying
+    // out the toggle makes it clear it has no effect right now.
+    if (humanModeRow) {
+      humanModeRow.classList.toggle('disabled-by-mustwin', enabled);
+    }
+  }
 
   function updateAccuracyVisibility(humanMode) {
     if (accuracyControl) {
@@ -49,6 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
     autoPlayToggle.checked = settings.autoPlay;
     autoQueueToggle.checked = settings.autoQueue;
     humanModeToggle.checked = settings.humanMode;
+    mustWinToggle.checked = settings.mustWin;
     engineUrlInput.value = settings.engineUrl;
     
     accuracySlider.value = settings.targetAccuracy;
@@ -69,6 +83,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     updateAccuracyVisibility(settings.humanMode);
+    applyMustWinUI(settings.mustWin);
   });
 
   // Event Listeners for Changes
@@ -87,6 +102,11 @@ document.addEventListener('DOMContentLoaded', () => {
   humanModeToggle.addEventListener('change', () => {
     chrome.storage.local.set({ humanMode: humanModeToggle.checked });
     updateAccuracyVisibility(humanModeToggle.checked);
+  });
+
+  mustWinToggle.addEventListener('change', () => {
+    chrome.storage.local.set({ mustWin: mustWinToggle.checked });
+    applyMustWinUI(mustWinToggle.checked);
   });
 
   accuracySlider.addEventListener('input', () => {
@@ -120,6 +140,117 @@ document.addEventListener('DOMContentLoaded', () => {
       speedSlider.style.opacity = autoRandomizeToggle.checked ? '0.5' : '1.0';
     });
   }
+
+  // ============================================================
+  // PHASE ELO (manual override for middle/endgame)
+  // ============================================================
+  const phaseEloToggle = document.getElementById('phaseEloEnabled');
+  const phaseEloSettings = document.getElementById('phaseEloSettings');
+  const phaseEloModeLabel = document.getElementById('phaseEloModeLabel');
+  const middleEloInput = document.getElementById('manualMiddlegameElo');
+  const endEloInput = document.getElementById('manualEndgameElo');
+
+  function refreshPhaseEloUI() {
+    const manual = phaseEloToggle.checked;
+    phaseEloSettings.classList.toggle('hidden', !manual);
+    phaseEloModeLabel.textContent = manual
+      ? `Manual — middle ${middleEloInput.value}, end ${endEloInput.value}`
+      : 'Auto (managed by Human Mode)';
+  }
+
+  chrome.storage.local.get({
+    phaseEloMode: 'auto',          // 'auto' or 'manual'
+    manualMiddlegameElo: 1200,
+    manualEndgameElo: 1300,
+  }, (s) => {
+    phaseEloToggle.checked = s.phaseEloMode === 'manual';
+    middleEloInput.value = s.manualMiddlegameElo;
+    endEloInput.value = s.manualEndgameElo;
+    refreshPhaseEloUI();
+  });
+
+  phaseEloToggle.addEventListener('change', () => {
+    chrome.storage.local.set({ phaseEloMode: phaseEloToggle.checked ? 'manual' : 'auto' });
+    refreshPhaseEloUI();
+  });
+  middleEloInput.addEventListener('change', () => {
+    const v = Math.max(500, Math.min(2000, parseInt(middleEloInput.value, 10) || 1200));
+    middleEloInput.value = v;
+    chrome.storage.local.set({ manualMiddlegameElo: v });
+    refreshPhaseEloUI();
+  });
+  endEloInput.addEventListener('change', () => {
+    const v = Math.max(500, Math.min(2000, parseInt(endEloInput.value, 10) || 1300));
+    endEloInput.value = v;
+    chrome.storage.local.set({ manualEndgameElo: v });
+    refreshPhaseEloUI();
+  });
+
+  // ============================================================
+  // MATCH BREAKS (pauses between games)
+  // ============================================================
+  const breaksEnabledToggle = document.getElementById('breaksEnabled');
+  const randomBreaksToggle = document.getElementById('randomBreaks');
+  const gamesBeforeBreakInput = document.getElementById('gamesBeforeBreak');
+  const breakMinutesInput = document.getElementById('breakMinutes');
+  const breaksSettings = document.getElementById('breaksSettings');
+  const manualBreakInputs = document.getElementById('manualBreakInputs');
+  const breakSummary = document.getElementById('breakSummary');
+
+  function updateBreakSummary() {
+    const txt = breakSummary.querySelector('.plan-text');
+    if (randomBreaksToggle.checked) {
+      txt.innerHTML = `Auto: play <strong>5-15</strong> games, then pause <strong>3-20</strong> min`;
+    } else {
+      const g = parseInt(gamesBeforeBreakInput.value, 10) || 10;
+      const m = parseFloat(breakMinutesInput.value) || 0;
+      txt.innerHTML = `Play <strong>${g}</strong> games, then pause <strong>${m}</strong> min`;
+    }
+  }
+
+  function updateBreaksVisibility() {
+    breaksSettings.classList.toggle('hidden', !breaksEnabledToggle.checked);
+    manualBreakInputs.classList.toggle('hidden', randomBreaksToggle.checked);
+    updateBreakSummary();
+  }
+
+  chrome.storage.local.get({
+    breaksEnabled: true,
+    randomBreaks: false,
+    gamesBeforeBreak: 10,
+    breakMinutes: 10,
+  }, (settings) => {
+    breaksEnabledToggle.checked = settings.breaksEnabled;
+    randomBreaksToggle.checked = settings.randomBreaks;
+    gamesBeforeBreakInput.value = settings.gamesBeforeBreak;
+    breakMinutesInput.value = settings.breakMinutes;
+    updateBreaksVisibility();
+  });
+
+  breaksEnabledToggle.addEventListener('change', () => {
+    chrome.storage.local.set({ breaksEnabled: breaksEnabledToggle.checked });
+    updateBreaksVisibility();
+  });
+
+  randomBreaksToggle.addEventListener('change', () => {
+    chrome.storage.local.set({ randomBreaks: randomBreaksToggle.checked });
+    // Reset the active batch so the new mode takes effect immediately
+    chrome.storage.local.set({ breakBatchGames: 0, gamesSinceBreak: 0 });
+    updateBreaksVisibility();
+  });
+
+  gamesBeforeBreakInput.addEventListener('change', () => {
+    chrome.storage.local.set({
+      gamesBeforeBreak: parseInt(gamesBeforeBreakInput.value, 10) || 10,
+      breakBatchGames: 0, // re-resolve batch target on next game
+    });
+    updateBreakSummary();
+  });
+
+  breakMinutesInput.addEventListener('change', () => {
+    chrome.storage.local.set({ breakMinutes: parseFloat(breakMinutesInput.value) || 0 });
+    updateBreakSummary();
+  });
 
   // ============================================================
   // ELO CLIMB PLANNER
@@ -346,5 +477,74 @@ document.addEventListener('DOMContentLoaded', () => {
   // Run immediately on open, then every 2 seconds
   pollBotState();
   setInterval(pollBotState, 2000);
+
+  // ============================================================
+  // LIVE SYNC — reflect changes made elsewhere (floating panel,
+  // content script auto-randomize, other tabs) without reopening.
+  // ============================================================
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+
+    if (changes.autoPlay) autoPlayToggle.checked = changes.autoPlay.newValue;
+    if (changes.autoQueue) autoQueueToggle.checked = changes.autoQueue.newValue;
+    if (changes.humanMode) {
+      humanModeToggle.checked = changes.humanMode.newValue;
+      updateAccuracyVisibility(changes.humanMode.newValue);
+    }
+    if (changes.mustWin) {
+      mustWinToggle.checked = changes.mustWin.newValue;
+      applyMustWinUI(changes.mustWin.newValue);
+    }
+    if (changes.engineUrl) engineUrlInput.value = changes.engineUrl.newValue;
+    if (changes.targetAccuracy) {
+      accuracySlider.value = changes.targetAccuracy.newValue;
+      accuracyVal.textContent = `${changes.targetAccuracy.newValue}%`;
+    }
+    if (changes.premoveProb) {
+      premoveSlider.value = changes.premoveProb.newValue;
+      premoveVal.textContent = `${changes.premoveProb.newValue}%`;
+    }
+    if (changes.thinkingSpeed && !speedSlider.disabled) {
+      speedSlider.value = changes.thinkingSpeed.newValue;
+      speedVal.textContent = `${changes.thinkingSpeed.newValue}s`;
+    }
+    if (changes.autoRandomizeSpeed && autoRandomizeToggle) {
+      autoRandomizeToggle.checked = changes.autoRandomizeSpeed.newValue;
+      speedSlider.disabled = changes.autoRandomizeSpeed.newValue;
+      speedSlider.style.opacity = changes.autoRandomizeSpeed.newValue ? '0.5' : '1.0';
+    }
+
+    // Phase ELO
+    if (changes.phaseEloMode) {
+      phaseEloToggle.checked = changes.phaseEloMode.newValue === 'manual';
+      refreshPhaseEloUI();
+    }
+    if (changes.manualMiddlegameElo) {
+      middleEloInput.value = changes.manualMiddlegameElo.newValue;
+      refreshPhaseEloUI();
+    }
+    if (changes.manualEndgameElo) {
+      endEloInput.value = changes.manualEndgameElo.newValue;
+      refreshPhaseEloUI();
+    }
+
+    // Break settings
+    if (changes.breaksEnabled) {
+      breaksEnabledToggle.checked = changes.breaksEnabled.newValue;
+      updateBreaksVisibility();
+    }
+    if (changes.randomBreaks) {
+      randomBreaksToggle.checked = changes.randomBreaks.newValue;
+      updateBreaksVisibility();
+    }
+    if (changes.gamesBeforeBreak) {
+      gamesBeforeBreakInput.value = changes.gamesBeforeBreak.newValue;
+      updateBreakSummary();
+    }
+    if (changes.breakMinutes) {
+      breakMinutesInput.value = changes.breakMinutes.newValue;
+      updateBreakSummary();
+    }
+  });
 });
 

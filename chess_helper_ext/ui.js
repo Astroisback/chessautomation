@@ -1,8 +1,38 @@
 // --- CONFIG & STATE ---
-window.chessHelper = {
+const CH_SETTINGS_KEY = 'chessHelperSettings';
+
+function loadSettings() {
+    const defaults = {
+        adaptiveThink: true,   // human-like variable think time
+        randomMode: false,     // auto-decide games-per-break & break length
+        gamesBeforeDelay: 10,  // games to play before taking a break
+        delayMinutes: 10       // break length in minutes
+    };
+    try {
+        const saved = JSON.parse(localStorage.getItem(CH_SETTINGS_KEY) || '{}');
+        return Object.assign(defaults, saved);
+    } catch (e) {
+        return defaults;
+    }
+}
+
+function saveSettings() {
+    try {
+        localStorage.setItem(CH_SETTINGS_KEY, JSON.stringify({
+            adaptiveThink: window.chessHelper.adaptiveThink,
+            randomMode: window.chessHelper.randomMode,
+            gamesBeforeDelay: window.chessHelper.gamesBeforeDelay,
+            delayMinutes: window.chessHelper.delayMinutes
+        }));
+    } catch (e) { /* ignore */ }
+}
+
+window.chessHelper = Object.assign({
     autoPlay: false,
-    debug: true
-};
+    debug: true,
+    paused: false,
+    gamesPlayed: 0
+}, loadSettings());
 
 function log(msg) {
     if (window.chessHelper.debug) console.log(`[ChessHelper] ${msg}`);

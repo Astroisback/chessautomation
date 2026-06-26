@@ -264,6 +264,131 @@ async function handlePromotion(piece) {
 }
 
 
+// --- HUMAN THINK TIME (ADAPTIVE) ---
+let moveCounter = 0;
+
+function countPieces(fen) {
+    const placement = (fen || "").split(' ')[0];
+    return (placement.match(/[a-zA-Z]/g) || []).length;
+}
+
+// Returns a human-like "thinking" duration in ms, scaled to game phase / complexity.
+function computeThinkTimeMs(fen) {
+    const cfg = window.chessHelper || {};
+
+    // If both adaptive think and random mode are off, keep the legacy snappy delay.
+    if (cfg.adaptiveThink === false && !cfg.randomMode) return 120;
+
+    const pieces = countPieces(fen);
+    let base;
+
+    if (moveCounter < 6) {
+        // Opening: humans play book moves fast
+        base = 300 + Math.random() * 900;          // ~0.3 - 1.2s
+    } else if (pieces > 20) {
+        // Crowded / early middlegame
+        base = 800 + Math.random() * 2500;         // ~0.8 - 3.3s
+    } else if (pieces > 10) {
+        // Complex middlegame, more calculation
+        base = 1200 + Math.random() * 4000;        // ~1.2 - 5.2s
+    } else {
+        // Endgame: fewer pieces, moderate thought
+        base = 600 + Math.random() * 2200;         // ~0.6 - 2.8s
+    }
+
+    // Random mode widens the variance so timing looks less mechanical
+    if (cfg.randomMode) base *= 0.6 + Math.random() * 1.4;
+
+    // Occasionally take a long "real" think, like a human pausing
+    if (Math.random() < 0.10) base += 2000 + Math.random() * 4000;
+
+    return Math.round(base);
+}
+
+// --- GAME COUNT & BREAKS (ANTI-DETECTION) ---
+let gameOverActive = false;
+let pauseUntil = 0;
+
+function isGameOver() {
+    return !!document.querySelector(
+        '.game-over-modal-content, .game-over-header-component, ' +
+        '[class*="game-over-modal"], .modal-game-over-component, ' +
+        '.game-over-header-header'
+    );
+}
+
+// Decide the target number of games and the break length for the next batch.
+function pickBatchSettings() {
+    const cfg = window.chessHelper;
+    if (!cfg) return;
+    if (cfg.randomMode) {
+        // Auto-decide: 5-15 games, then a 3-20 minute break
+        cfg._gamesTarget = 5 + Math.floor(Math.random() * 11);
+        cfg._delayMs = (3 + Math.random() * 17) * 60000;
+    } else {
+        cfg._gamesTarget = Math.max(1, parseInt(cfg.gamesBeforeDelay, 10) || 10);
+        cfg._delayMs = Math.max(0, parseFloat(cfg.delayMinutes) || 10) * 60000;
+    }
+}
+
+function notifyUI() {
+    if (window.chessHelperUI && typeof window.chessHelperUI.onStateChange === 'function') {
+        window.chessHelperUI.onStateChange();
+    }
+}
+
+function onGameFinished() {
+    const cfg = window.chessHelper;
+    if (!cfg) return;
+    if (!cfg._gamesTarget) pickBatchSettings();
+    cfg.gamesPlayed = (cfg.gamesPlayed || 0) + 1;
+    log(`Game finished. Count: ${cfg.gamesPlayed}/${cfg._gamesTarget}`);
+    if (cfg.gamesPlayed >= cfg._gamesTarget) startDelay();
+    notifyUI();
+}
+
+function startDelay() {
+    const cfg = window.chessHelper;
+    if (!cfg) return;
+    if (!cfg._delayMs) pickBatchSettings();
+    pauseUntil = Date.now() + cfg._delayMs;
+    cfg.paused = true;
+    cfg.gamesPlayed = 0;
+    log(`Break: pausing autoplay for ~${Math.round(cfg._delayMs / 60000)} min.`);
+    pickBatchSettings(); // choose settings for the batch after the break
+    notifyUI();
+}
+
+// Detect transitions into / out of the game-over state to count games.
+function checkGameEnd() {
+    const cfg = window.chessHelper;
+    if (!cfg || !cfg.autoPlay) return;
+    const over = isGameOver();
+    if (over && !gameOverActive) {
+        gameOverActive = true;
+        moveCounter = 0;
+        onGameFinished();
+    } else if (!over && gameOverActive) {
+        gameOverActive = false; // a new game has started
+        moveCounter = 0;
+    }
+}
+
+// Release the pause once the break has elapsed.
+function checkPause() {
+    const cfg = window.chessHelper;
+    if (cfg && cfg.paused && Date.now() >= pauseUntil) {
+        cfg.paused = false;
+        log("Break finished, resuming autoplay.");
+        notifyUI();
+    }
+}
+
+// Expose remaining break time (ms) for the UI countdown.
+function getPauseRemainingMs() {
+    return Math.max(0, pauseUntil - Date.now());
+}
+
 // --- LOOP & LOGIC ---
 
 let isProcessing = false;
@@ -271,6 +396,7 @@ let lastProcessedFen = "";
 
 async function checkTurnAndPlay() {
     if (!window.chessHelper || !window.chessHelper.autoPlay) return;
+    if (window.chessHelper.paused) return; // on a break between games
     if (isProcessing) return;
 
     const fen = getFEN();
@@ -290,21 +416,23 @@ async function checkTurnAndPlay() {
     lastProcessedFen = fen;
 
     try {
-        log("My turn...");
-        await sleep(120); // juste laisser le DOM se stabiliser un peu
+        const thinkMs = computeThinkTimeMs(fen);
+        log(`My turn... thinking for ${thinkMs}ms`);
+        await sleep(thinkMs); // human-like adaptive think time
 
 
-        if (getFEN() === fen && window.chessHelper.autoPlay) {
+        if (getFEN() === fen && window.chessHelper.autoPlay && !window.chessHelper.paused) {
             const move = await fetchBestMove(fen);
             if (move) {
                 const fenNow = getFEN();
-                if (fenNow !== fen || !window.chessHelper.autoPlay) {
-                    log("Abort: position changed or autoplay disabled");
+                if (fenNow !== fen || !window.chessHelper.autoPlay || window.chessHelper.paused) {
+                    log("Abort: position changed, autoplay disabled, or on break");
                     return;
                 }
 
                 // Execute the move
                 await makeMove(move);
+                moveCounter++;
             }
         }
     } catch (e) {
@@ -317,7 +445,10 @@ async function checkTurnAndPlay() {
 
 // Observer
 const observer = new MutationObserver(() => {
-    if (window.chessHelper?.autoPlay) checkTurnAndPlay();
+    if (window.chessHelper?.autoPlay) {
+        checkGameEnd();
+        checkTurnAndPlay();
+    }
 });
 function initObserver() {
     const board = getBoard();
@@ -328,16 +459,31 @@ function initObserver() {
     }
 }
 initObserver();
-setInterval(() => { if (window.chessHelper?.autoPlay) checkTurnAndPlay(); }, 2000);
+setInterval(() => {
+    if (!window.chessHelper?.autoPlay) return;
+    checkPause();
+    checkGameEnd();
+    checkTurnAndPlay();
+}, 2000);
 
 // EXPORT
 window.chessHelperEngine = {
     triggerAutoPlay: () => {
         isProcessing = false;
         lastProcessedFen = "";
+        pickBatchSettings();
         checkTurnAndPlay();
     },
     getFEN: getFEN,
     fetchBestMove: fetchBestMove,
-    getMyColor: getMyColor
+    getMyColor: getMyColor,
+    getPauseRemainingMs: getPauseRemainingMs,
+    skipBreak: () => {
+        if (window.chessHelper) {
+            window.chessHelper.paused = false;
+            pauseUntil = 0;
+            log("Break skipped by user.");
+            notifyUI();
+        }
+    }
 };

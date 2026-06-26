@@ -72,6 +72,17 @@
           <span class="slider round"></span>
         </label>
       </div>
+
+      <div class="toggle-control must-win-toggle">
+        <div class="control-label-group">
+          <span class="control-title must-win-title">🏆 Must Win</span>
+          <span class="control-desc">Max strength, no blunders (turns off Human Mode)</span>
+        </div>
+        <label class="switch must-win-switch">
+          <input type="checkbox" id="mustWin">
+          <span class="slider round"></span>
+        </label>
+      </div>
     </div>
 
     <!-- Configurations Sliders -->
@@ -120,6 +131,79 @@
             <input type="checkbox" id="autoRandomizeSpeed">
             <span class="slider round"></span>
           </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Phase ELO -->
+    <div class="settings-section phase-elo-section">
+      <div class="phase-elo-header">
+        <h2>♟ Phase ELO</h2>
+        <label class="switch mini-switch">
+          <input type="checkbox" id="phaseEloEnabled">
+          <span class="slider round"></span>
+        </label>
+      </div>
+
+      <div class="phase-elo-desc">
+        <span id="phaseEloModeLabel">Auto (managed by Human Mode)</span>
+      </div>
+
+      <div id="phaseEloSettings" class="hidden">
+        <div class="elo-row">
+          <div class="elo-input-group">
+            <span class="elo-label">Middlegame</span>
+            <input type="number" id="manualMiddlegameElo" value="1200" min="500" max="2000" step="50" class="elo-input">
+          </div>
+          <div class="elo-input-group">
+            <span class="elo-label">Endgame</span>
+            <input type="number" id="manualEndgameElo" value="1300" min="500" max="2000" step="50" class="elo-input">
+          </div>
+        </div>
+        <div class="phase-elo-hint">
+          Direct ELO override for middlegame (moves 11–30) and endgame (move 30+).
+          Opening always uses the auto-managed strong-book ELO.
+        </div>
+      </div>
+    </div>
+
+    <!-- Match Breaks (anti-detection pauses between games) -->
+    <div class="settings-section breaks-section">
+      <div class="breaks-header">
+        <h2>☕ Match Breaks</h2>
+        <label class="switch mini-switch">
+          <input type="checkbox" id="breaksEnabled" checked>
+          <span class="slider round"></span>
+        </label>
+      </div>
+
+      <div id="breaksSettings">
+        <div class="toggle-control" style="margin-bottom: 12px;">
+          <div class="control-label-group">
+            <span class="control-title">Random Mode (auto)</span>
+            <span class="control-desc">Auto-decide games & break length</span>
+          </div>
+          <label class="switch mini-switch">
+            <input type="checkbox" id="randomBreaks">
+            <span class="slider round"></span>
+          </label>
+        </div>
+
+        <div id="manualBreakInputs">
+          <div class="elo-row">
+            <div class="elo-input-group">
+              <span class="elo-label">Games / Break</span>
+              <input type="number" id="gamesBeforeBreak" value="10" min="1" max="100" class="elo-input">
+            </div>
+            <div class="elo-input-group">
+              <span class="elo-label">Break (min)</span>
+              <input type="number" id="breakMinutes" value="10" min="0" max="240" step="0.5" class="elo-input">
+            </div>
+          </div>
+        </div>
+
+        <div class="break-summary" id="breakSummary">
+          <span class="plan-text">Play <strong>10</strong> games, then pause <strong>10</strong> min</span>
         </div>
       </div>
     </div>

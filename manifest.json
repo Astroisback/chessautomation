@@ -5,8 +5,15 @@
   "description": "An autonomous, human-like chess player for Chess.com. Features dynamic delays, auto-queueing, simulated pre-moves, and custom accuracy control.",
   "permissions": ["storage", "tabs"],
   "host_permissions": ["https://*.chess.com/*", "http://100.86.25.112:8000/*"],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "chess-automata@local",
+      "strict_min_version": "115.0"
+    }
+  },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
   },
   "content_scripts": [
     {

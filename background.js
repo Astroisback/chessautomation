@@ -61,11 +61,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (action === "getEngineMove") {
-    const { url, moves, color, elo } = data;
+    const { url, moves, color, elo, mustWin } = data;
     fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ moves, elo: elo || 1100 }),
+      body: JSON.stringify({ moves, elo: elo || 1100, mustWin: !!mustWin }),
     })
       .then((response) => {
         if (!response.ok)

@@ -32,8 +32,9 @@ function generateGamePersonality() {
   const f = humanProfile.fatigue;
   const tilt = humanProfile.lastOutcome === 'loss' ? 15 : 0;
   
-  // Force a weak game after 3-5 consecutive wins to break streaks
-  let forceWeakGame = humanProfile.consecutiveWins >= 3 + Math.floor(Math.random() * 3);
+  // Force a weak game after a longer winning streak (was 3-5, now 5-8) so
+  // that occasional "off games" stay rare and don't dominate the rhythm.
+  let forceWeakGame = humanProfile.consecutiveWins >= 5 + Math.floor(Math.random() * 4);
   
   // ============================================================
   // ELO CLIMB PLANNER INTEGRATION
@@ -73,23 +74,23 @@ function generateGamePersonality() {
   const baseElo = forceWeakGame
     ? 600 + Math.random() * 200   // Very weak: 600-800
     : 1100 + Math.random() * 300 - f * 3 - tilt; // Normal: ~1100-1400 minus fatigue
-  
+
   const personality = {
     // ELO by game phase
     openingElo:    Math.round(Math.min(1500, baseElo + 200 + Math.random() * 100)),  // Humans know openings
     middlegameElo: Math.round(Math.max(600, baseElo - 100 - Math.random() * 150)),   // Humans struggle here
     endgameElo:    Math.round(Math.max(700, baseElo - 50 + Math.random() * 100)),    // Variable
-    
+
     // Blunder probability (3-20% depending on fatigue)
     blunderChance: forceWeakGame
       ? 0.15 + Math.random() * 0.10   // 15-25% for forced weak games
       : Math.max(0.03, 0.03 + f * 0.0012 + Math.random() * 0.04 + tilt * 0.002),
-    
+
     // Mate blindness: chance to miss a winning checkmate
     mateBlindness: forceWeakGame
       ? 0.30 + Math.random() * 0.20    // 30-50% for forced weak games
       : Math.max(0.05, 0.05 + f * 0.001 + Math.random() * 0.08),
-    
+
     forceWeakGame: forceWeakGame,
   };
   
@@ -440,66 +441,169 @@ function getSquareRect(square, boardEl, isFlipped) {
   };
 }
 
-async function dispatchDragAndDrop(fromSq, toSq, isFlipped) {
-  const boardEl =
-    document.querySelector("chess-board") ||
-    document.querySelector("wc-chess-board");
-  if (!boardEl) return;
+// ============================================================
+// HUMANIZED MOUSE / INPUT
+// Anti-fingerprint rules every action below follows:
+//  - Click coordinates are jittered around the square center, never exact.
+//  - The "virtual cursor" persists between moves; it moves along a curved,
+//    multi-step path instead of teleporting.
+//  - Hold time and inter-step delay are randomized per call.
+//  - Drag dispatches many intermediate pointermove events along the path,
+//    not a single point→point jump.
+//  - Mode (click-to-click vs drag) is mixed unpredictably between moves.
+// Note: synthetic events still have isTrusted=false. Chess.com's current
+// fair-play system is statistical (accuracy/timing), not event-trust based,
+// so the timing+motion realism above is the practical signal that matters.
+// ============================================================
+let virtualCursor = null; // {x, y} — persists between moves so cursor doesn't teleport
 
-  const startCoords = getSquareRect(fromSq, boardEl, isFlipped);
-  const endCoords = getSquareRect(toSq, boardEl, isFlipped);
+function rnd(min, max) { return min + Math.random() * (max - min); }
 
-  let targetEl = document.elementFromPoint(startCoords.x, startCoords.y) || boardEl;
-
-  // 1. Pointer Down
-  dispatchPointer("pointerdown", targetEl, startCoords, 1);
-  await new Promise((r) => setTimeout(r, 60));
-
-  // 2. Drag to destination
-  dispatchPointer("pointermove", document.body, endCoords, 1);
-  await new Promise((r) => setTimeout(r, 60));
-
-  // 3. Drop
-  dispatchPointer("pointerup", document.body, endCoords, 1);
+// Gaussian-ish jitter (Box-Muller); clamped to ±maxStdDev*stdDev range.
+function gaussJitter(stdDev, maxStdDev = 2.5) {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  const z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+  return Math.max(-maxStdDev, Math.min(maxStdDev, z)) * stdDev;
 }
 
-function clickSquare(squareName, isFlipped) {
-  // Kept for fallback or highlighting
-  const boardEl =
-    document.querySelector("chess-board") ||
-    document.querySelector("wc-chess-board");
-  if (!boardEl) return;
-
-  const coords = getSquareRect(squareName, boardEl, isFlipped);
-  const el = document.elementFromPoint(coords.x, coords.y) || boardEl;
-
-  const downConfig = {
-    clientX: coords.x,
-    clientY: coords.y,
-    button: 0,
-    buttons: 1,
-    bubbles: true,
-    cancelable: true,
-    view: window,
+// Pick a click point near the centre of the given square — never the exact pixel.
+function pointInSquare(square, boardEl, isFlipped) {
+  const c = getSquareRect(square, boardEl, isFlipped);
+  const sz = boardEl.getBoundingClientRect().width / 8;
+  // Stay within ~35% of half-size from centre so we land inside the piece.
+  const r = sz * 0.35;
+  return {
+    x: c.x + gaussJitter(r * 0.55, 1.8),
+    y: c.y + gaussJitter(r * 0.55, 1.8),
   };
-  const upConfig = {
-    clientX: coords.x,
-    clientY: coords.y,
-    button: 0,
-    buttons: 0,
-    bubbles: true,
-    cancelable: true,
-    view: window,
-  };
-
-  el.dispatchEvent(new PointerEvent("pointerdown", downConfig));
-  el.dispatchEvent(new MouseEvent("mousedown", downConfig));
-
-  setTimeout(() => {
-    el.dispatchEvent(new PointerEvent("pointerup", upConfig));
-    el.dispatchEvent(new MouseEvent("mouseup", upConfig));
-  }, 30);
 }
+
+function emitMove(targetEl, x, y, buttons) {
+  const evt = new PointerEvent('pointermove', {
+    bubbles: true, cancelable: true, view: window,
+    clientX: x, clientY: y, buttons, pointerId: 1, isPrimary: true,
+    width: 1, height: 1, pressure: buttons ? 0.5 : 0,
+  });
+  targetEl.dispatchEvent(evt);
+  const mEvt = new MouseEvent('mousemove', {
+    bubbles: true, cancelable: true, view: window,
+    clientX: x, clientY: y, buttons, button: 0,
+  });
+  targetEl.dispatchEvent(mEvt);
+  virtualCursor = { x, y };
+}
+
+// Move the virtual cursor from current position to (tx, ty) along a slightly
+// curved path with variable step timing. `buttons` is 1 during a drag, 0 otherwise.
+async function humanMoveTo(tx, ty, buttons = 0) {
+  if (!virtualCursor) {
+    // First-ever move: pretend the cursor was somewhere near the target board.
+    virtualCursor = { x: tx + gaussJitter(80, 2), y: ty + gaussJitter(80, 2) };
+  }
+  const sx = virtualCursor.x, sy = virtualCursor.y;
+  const dx = tx - sx, dy = ty - sy;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 1) return;
+
+  // Step count scales with distance; tiny moves get a couple of steps,
+  // long swings get a dozen or so.
+  const steps = Math.max(3, Math.min(18, Math.round(dist / rnd(28, 55))));
+
+  // Slight perpendicular bow so the path isn't a straight line.
+  const px = -dy / dist, py = dx / dist;
+  const bow = (Math.random() < 0.5 ? -1 : 1) * rnd(6, dist * 0.12);
+
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    // Ease-in-out so speed varies along the path.
+    const ease = 0.5 - 0.5 * Math.cos(Math.PI * t);
+    const arc = Math.sin(Math.PI * t) * bow;
+    const x = sx + dx * ease + px * arc + gaussJitter(1.2, 2);
+    const y = sy + dy * ease + py * arc + gaussJitter(1.2, 2);
+
+    const targetEl = document.elementFromPoint(x, y) || document.body;
+    emitMove(targetEl, x, y, buttons);
+
+    await new Promise((r) => setTimeout(r, rnd(8, 22)));
+  }
+}
+
+// Optional "hover hesitation" — humans often nudge a few pixels and settle
+// before pressing. We do it with ~22% probability so the pattern isn't on
+// every move (which would itself become a fingerprint).
+async function maybeHoverHesitate(x, y) {
+  if (Math.random() > 0.22) return;
+  const wiggles = 2 + Math.floor(Math.random() * 3); // 2..4 tiny moves
+  for (let i = 0; i < wiggles; i++) {
+    const wx = x + gaussJitter(3.5, 2);
+    const wy = y + gaussJitter(3.5, 2);
+    const el = document.elementFromPoint(wx, wy) || document.body;
+    emitMove(el, wx, wy, 0);
+    await new Promise((r) => setTimeout(r, rnd(20, 65)));
+  }
+}
+
+// Press at (x, y) with a randomized hold; releases at the same point.
+async function humanClickAt(x, y) {
+  await maybeHoverHesitate(x, y);
+  const el = document.elementFromPoint(x, y) || document.body;
+  const downCfg = {
+    bubbles: true, cancelable: true, view: window,
+    clientX: x, clientY: y, button: 0, buttons: 1,
+    pointerId: 1, isPrimary: true, width: 1, height: 1, pressure: 0.5,
+  };
+  const upCfg = { ...downCfg, buttons: 0, pressure: 0 };
+
+  el.dispatchEvent(new PointerEvent('pointerdown', downCfg));
+  el.dispatchEvent(new MouseEvent('mousedown', downCfg));
+
+  await new Promise((r) => setTimeout(r, rnd(45, 130)));
+
+  el.dispatchEvent(new PointerEvent('pointerup', upCfg));
+  el.dispatchEvent(new MouseEvent('mouseup', upCfg));
+  el.dispatchEvent(new MouseEvent('click', upCfg));
+}
+
+// Press at (fx, fy), drag along a curved path to (tx, ty), release.
+async function humanDrag(fx, fy, tx, ty) {
+  const downEl = document.elementFromPoint(fx, fy) || document.body;
+  const downCfg = {
+    bubbles: true, cancelable: true, view: window,
+    clientX: fx, clientY: fy, button: 0, buttons: 1,
+    pointerId: 1, isPrimary: true, width: 1, height: 1, pressure: 0.5,
+  };
+  downEl.dispatchEvent(new PointerEvent('pointerdown', downCfg));
+  downEl.dispatchEvent(new MouseEvent('mousedown', downCfg));
+  virtualCursor = { x: fx, y: fy };
+
+  await new Promise((r) => setTimeout(r, rnd(40, 110)));
+  await humanMoveTo(tx, ty, 1);
+  // Sometimes hover-hesitate over the destination before releasing.
+  if (Math.random() < 0.25) {
+    const wiggles = 2 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < wiggles; i++) {
+      const wx = tx + gaussJitter(3.5, 2);
+      const wy = ty + gaussJitter(3.5, 2);
+      const el = document.elementFromPoint(wx, wy) || document.body;
+      emitMove(el, wx, wy, 1);
+      await new Promise((r) => setTimeout(r, rnd(20, 65)));
+    }
+  }
+  await new Promise((r) => setTimeout(r, rnd(30, 90)));
+
+  const upEl = document.elementFromPoint(tx, ty) || document.body;
+  const upCfg = {
+    bubbles: true, cancelable: true, view: window,
+    clientX: tx, clientY: ty, button: 0, buttons: 0,
+    pointerId: 1, isPrimary: true, width: 1, height: 1, pressure: 0,
+  };
+  upEl.dispatchEvent(new PointerEvent('pointerup', upCfg));
+  upEl.dispatchEvent(new MouseEvent('mouseup', upCfg));
+}
+
+
 
 function selectPromotionPiece(toSquare, promotionType, isFlipped) {
   const color = ourColor;
@@ -564,19 +668,41 @@ async function executeMove(moveStr) {
     const toSquare = moveStr.substring(2, 4);
     const promotionType = moveStr.length > 4 ? moveStr[4] : null;
 
-    if (moveRetryCount > 0) {
-      // Retries use drag-and-drop (works even when click-to-move is disabled)
-      console.log(`[Automata] Retry #${moveRetryCount}: using drag-and-drop for ${moveStr}`);
-      await dispatchDragAndDrop(fromSquare, toSquare, isFlipped);
+    // Pick a click point near (not exactly at) the centre of each square.
+    const fromPt = pointInSquare(fromSquare, boardEl, isFlipped);
+    const toPt = pointInSquare(toSquare, boardEl, isFlipped);
+
+    // Decide motion style: drag-and-drop OR click-to-click. Retries always use
+    // drag (works even when chess.com's click-to-move is disabled). Otherwise
+    // mix it up — humans don't always do the same thing.
+    const forceDrag = moveRetryCount > 0;
+    const useDrag = forceDrag || Math.random() < 0.35;
+
+    if (useDrag) {
+      if (forceDrag) {
+        console.log(`[Automata] Retry #${moveRetryCount}: drag-and-drop for ${moveStr}`);
+      }
+      // Approach the piece first (cursor moves there from wherever it was),
+      // tiny settle pause, then press-drag-release along a curved path.
+      await humanMoveTo(fromPt.x, fromPt.y, 0);
+      await new Promise((r) => setTimeout(r, rnd(60, 180)));
+      await humanDrag(fromPt.x, fromPt.y, toPt.x, toPt.y);
     } else {
-      // First attempt: click-to-move
-      clickSquare(fromSquare, isFlipped);
-      await new Promise((r) => setTimeout(r, 200));
-      clickSquare(toSquare, isFlipped);
+      // Click-to-click: approach → click from-square → approach to-square → click.
+      await humanMoveTo(fromPt.x, fromPt.y, 0);
+      await new Promise((r) => setTimeout(r, rnd(40, 150)));
+      await humanClickAt(fromPt.x, fromPt.y);
+
+      // Variable inter-click delay (humans rarely re-click in exactly 200 ms).
+      await new Promise((r) => setTimeout(r, rnd(150, 380)));
+
+      await humanMoveTo(toPt.x, toPt.y, 0);
+      await new Promise((r) => setTimeout(r, rnd(40, 150)));
+      await humanClickAt(toPt.x, toPt.y);
     }
 
     if (promotionType) {
-      await new Promise((r) => setTimeout(r, 400));
+      await new Promise((r) => setTimeout(r, rnd(300, 600)));
       selectPromotionPiece(toSquare, promotionType, isFlipped);
     }
 
@@ -609,23 +735,47 @@ async function executeMove(moveStr) {
   }
 }
 
-function getHumanDelay(history, targetSpeed, isPreMove) {
+function getHumanDelay(history, targetSpeed, isPreMove, ctx = {}) {
+  // Forced/obvious pre-moves and recaptures: near-instant, like a human snapping a piece
   if (isPreMove) return 120 + Math.random() * 130;
 
-  let baseDelay = targetSpeed * 1000;
-  if (history.length < 6) baseDelay *= 0.45;
-  else if (history.length > 45) baseDelay *= 0.75;
+  // targetSpeed is the user's slider value in SECONDS. We want the AVERAGE
+  // move time to track this value, not "base before multipliers". So every
+  // multiplier below is centered on 1.0 instead of being one-sided.
+  let mult = 1.0;
 
-  let u = 0,
-    v = 0;
+  // Game-phase: opening is faster (book moves), late endgame slightly faster.
+  if (history.length < 6) mult *= 0.6;
+  else if (history.length > 45) mult *= 0.85;
+
+  // Complexity: piece count of 32 (full board) ~1.10, piece count of 2 (bare
+  // endgame) ~0.90. Centered on ~1.0 at midboard, much gentler than before.
+  const pieceCount = ctx.pieceCount ?? 32;
+  mult *= 0.9 + (Math.min(pieceCount, 32) / 32) * 0.20;
+
+  // Captures get a tiny bit longer, obvious recaptures snappier.
+  if (ctx.isRecapture) mult *= 0.6;
+  else if (ctx.isCapture) mult *= 1.05;
+
+  let baseDelay = targetSpeed * 1000 * mult;
+
+  // Occasional "deep think" — scaled by slider so it doesn't dominate at low
+  // settings. At slider=1.0 it adds 0.5-2s; at slider=8.0 it adds 4-16s.
+  if (!ctx.isRecapture && Math.random() < 0.06) {
+    baseDelay += targetSpeed * 1000 * (0.5 + Math.random() * 1.5);
+  }
+
+  // Gaussian jitter (Box-Muller), tightened from 28% to 18% std dev so the
+  // slider value is more meaningful.
+  let u = 0, v = 0;
   while (u === 0) u = Math.random();
   while (v === 0) v = Math.random();
   const normalRandom =
     Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
 
-  let finalDelay = baseDelay + normalRandom * (baseDelay * 0.28);
-  // Minimum must exceed the isMakingMove lock (800 ms) to avoid a silent bail-out
-  return Math.max(1000, Math.min(15000, finalDelay));
+  let finalDelay = baseDelay + normalRandom * (baseDelay * 0.18);
+  // 600 ms floor (just above the 500 ms isMakingMove lock), 15 s ceiling.
+  return Math.max(600, Math.min(15000, finalDelay));
 }
 
 async function getEngineMove(settings) {
@@ -642,6 +792,7 @@ async function getEngineMove(settings) {
         moves: moveHistory,
         color: ourColor,
         elo: settings.computedElo || 1100,
+        mustWin: !!settings.mustWin,
       },
     });
 
@@ -796,111 +947,501 @@ function isGameOver() {
 }
 
 function parseGameOutcome() {
-  // Collect text from all game-over related elements
-  const candidates = document.querySelectorAll(
-    '[class*="game-over"], [class*="gameOver"], [class*="modal"], [class*="result"], [class*="dialog"]'
-  );
+  // ── Step 1: Collect text from game-over elements (broad selectors) ──
+  const selectors = [
+    // Chess.com game-over modals (multiple UI versions)
+    '[class*="game-over"]',
+    '[class*="gameOver"]',
+    '[class*="game-result"]',
+    '[class*="modal-game"]',
+    '[class*="board-modal"]',
+    '.board-modal-container-container',
+    '.game-over-modal-container',
+    '.game-over-header-component',
+    // Generic modal/dialog/result elements
+    '[class*="modal-content"]',
+    '[class*="modal-container"]',
+    '[class*="dialog"]',
+    '[class*="result"]',
+    // Chess.com specific notification areas
+    '[class*="notification"]',
+    '[class*="alert"]',
+  ];
+
   let text = '';
-  for (const el of candidates) {
-    text += ' ' + (el.innerText || el.textContent || '');
+  for (const sel of selectors) {
+    const els = document.querySelectorAll(sel);
+    for (const el of els) {
+      if (el.offsetWidth > 0 || el.offsetHeight > 0) {
+        text += ' ' + (el.innerText || el.textContent || '');
+      }
+    }
   }
-  text = text.toLowerCase();
 
-  // Draw detection
-  if (
-    text.includes('draw') ||
-    text.includes('stalemate') ||
-    text.includes('insufficient') ||
-    text.includes('repetition') ||
-    text.includes('agreed')
-  )
-    return 'draw';
+  // ── Step 2: ALWAYS append body text. The PGN result string (1-0 / 0-1 /
+  // 1/2-1/2) lives in the move-list footer, which is rendered well before
+  // the modal text populates. Earlier we only fell back to body text when
+  // modal text was very short — that missed the common case where modal
+  // text appears but lacks the score string.
+  const bodyText = (document.body?.innerText || '');
+  text = (text + ' ' + bodyText).toLowerCase();
+  window.__chOutcomeRawText = text;  // exposed for devtools debugging
+  console.log(`[Automata Outcome] Collected ${text.length} chars (incl. body)`);
 
-  // Win detection
+  // Track which decision branch fired so the async caller can decide whether
+  // to retry (e.g. retry only if we fell through to the bottom fallback).
+  let parseBranch = null;
+  const settle = (branch, outcome) => {
+    parseBranch = branch;
+    window.__chOutcomeBranch = branch;
+    window.__chOutcomeResult = outcome;
+    console.log(`[Automata Outcome] branch=${branch} -> ${outcome}`);
+    return outcome;
+  };
+
+  // ── Step 3a (most reliable): explicit PGN-style score "1-0", "0-1",
+  // "1/2-1/2". chess.com always renders this in the game-over modal once a
+  // game ends. This is the cleanest signal and beats every heuristic below.
+  // Be lenient about separators: spaces, en/em dashes, slashes.
+  const scoreRe = /(?:^|[^\d])(1\s*[-–—]\s*0|0\s*[-–—]\s*1|1\s*[\/⁄]\s*2\s*[-–—]\s*1\s*[\/⁄]\s*2|½\s*[-–—]\s*½)(?:[^\d]|$)/;
+
+  // First try the bulk text scan.
+  let scoreHit = (text.match(scoreRe) || [])[1];
+
+  // Fallback: chess.com sometimes renders the score as separate digit nodes
+  // (e.g. <span>1</span>–<span>0</span>) and the bulk text loses the dash.
+  // Look for elements whose textContent IS the score by itself.
+  if (!scoreHit) {
+    const scoreCandidates = document.querySelectorAll(
+      '[class*="result"], [class*="score"], [class*="game-over"]'
+    );
+    for (const el of scoreCandidates) {
+      const t = ((el.innerText || el.textContent || '') + '').trim().toLowerCase();
+      if (t.length > 0 && t.length < 24) {
+        const m = t.match(/^(1\s*[-–—]\s*0|0\s*[-–—]\s*1|1\s*[\/⁄]\s*2\s*[-–—]\s*1\s*[\/⁄]\s*2|½\s*[-–—]\s*½)$/);
+        if (m) { scoreHit = m[1]; break; }
+      }
+    }
+  }
+
+  if (scoreHit) {
+    const s = scoreHit.replace(/\s+/g, '').replace(/[–—]/g, '-');
+    console.log(`[Automata Outcome] Score parsed: ${s}`);
+    if (s === '1-0') return settle('score-1-0', ourColor === 'w' ? 'win' : 'loss');
+    if (s === '0-1') return settle('score-0-1', ourColor === 'b' ? 'win' : 'loss');
+    return settle('score-draw', 'draw');
+  }
+
+  // ── Step 3b: chess.com result classes on the game-over header. We only
+  // accept SPECIFIC phrases (not bare "won"/"lost"), because the modal text
+  // often contains both perspectives — e.g. "Black won by checkmate" appears
+  // when WE (playing White) lost. Matching bare "won" would misreport that
+  // as our win.
+  const headerEl = document.querySelector(
+    '.game-over-header-component, [class*="game-over-header"], ' +
+    '[class*="game-result"], [class*="result-header"]'
+  );
+  if (headerEl) {
+    const hClass = (headerEl.className || '').toLowerCase();
+    const hText  = (headerEl.textContent || '').toLowerCase();
+
+    // Class-based check: chess.com often adds win/lost/draw indicators on the
+    // header element ITSELF (e.g. "game-over-header-win"). Class is reliable.
+    if (/(^|[-_\s])(won|victory|victorious|winner)([-_\s]|$)/.test(hClass)) return settle('header-class-won', 'win');
+    if (/(^|[-_\s])(lost|defeat|defeated|loser)([-_\s]|$)/.test(hClass))   return settle('header-class-lost', 'loss');
+    if (/(^|[-_\s])(drawn|tied)([-_\s]|$)/.test(hClass))                   return settle('header-class-drawn', 'draw');
+
+    // Text-based check: ONLY first-person phrases ("you won/lost/drew") OR
+    // side-specific phrases combined with our colour.
+    if (/(^|\W)you won(\W|$)/.test(hText) || /(^|\W)you win(\W|$)/.test(hText)) return settle('header-you-won', 'win');
+    if (/(^|\W)you lost(\W|$)/.test(hText) || /(^|\W)you lose(\W|$)/.test(hText)) return settle('header-you-lost', 'loss');
+    if (/(^|\W)you drew(\W|$)/.test(hText)) return settle('header-you-drew', 'draw');
+    if (/(^|\W)(drawn|tied|stalemate)(\W|$)/.test(hText)) return settle('header-text-drawn', 'draw');
+
+    if (/(^|\W)white (won|wins|is victorious)(\W|$)/.test(hText))
+      return settle('header-white-won', ourColor === 'w' ? 'win' : 'loss');
+    if (/(^|\W)black (won|wins|is victorious)(\W|$)/.test(hText))
+      return settle('header-black-won', ourColor === 'b' ? 'win' : 'loss');
+  }
+
+  // ── Step 4: Parse outcome — check WIN/LOSS FIRST, then DRAW ──
+  // (Checking draw first was a bug: the "Draw" button is always visible during games,
+  //  so text.includes('draw') would always be true!)
+
+  // ── Step 3c: unambiguous first-person phrases anywhere in the modal text.
+  // These beat every heuristic below and prevent the "won by resignation"
+  // substring from being mis-attributed when WE resigned. Order matters:
+  // check loss phrases first so "you lost by resignation" never falls through
+  // to "won by resignation" later.
+  if (text.includes('you resigned') || text.includes('you resign'))   return settle('you-resigned', 'loss');
+  if (text.includes('you lost')     || text.includes('you lose'))     return settle('you-lost', 'loss');
+  if (text.includes('you won')      || text.includes('you win'))      return settle('you-won', 'win');
+  if (text.includes('you drew')     || text.includes('you tied'))     return settle('you-drew', 'draw');
+
+  // === CHECKMATE (most specific, check first) ===
+  if (text.includes('checkmate')) {
+    // chess.com says things like "KingHydradon won by checkmate" or just "Checkmate"
+    // Try to find who won
+    if (text.includes('white') && (text.includes('won') || text.includes('win')))
+      return settle('mate-white-won', ourColor === 'w' ? 'win' : 'loss');
+    if (text.includes('black') && (text.includes('won') || text.includes('win')))
+      return settle('mate-black-won', ourColor === 'b' ? 'win' : 'loss');
+    // If it was our turn when checkmate happened, we got checkmated (lost)
+    return settle('mate-activecolor', activeColor === ourColor ? 'loss' : 'win');
+  }
+
+  // === RESIGNATION (match both "resigned" verb and "resignation" noun) ===
+  // chess.com modals often only say "Won by resignation" with the NOUN form,
+  // so checking only 'resigned' missed wins and they fell through to draw.
+  if (text.includes('resign')) {
+    if (text.includes('white resign'))
+      return settle('resign-white', ourColor === 'w' ? 'loss' : 'win');
+    if (text.includes('black resign'))
+      return settle('resign-black', ourColor === 'b' ? 'loss' : 'win');
+    if (text.includes('white won') || text.includes('white wins'))
+      return settle('resign-white-won', ourColor === 'w' ? 'win' : 'loss');
+    if (text.includes('black won') || text.includes('black wins'))
+      return settle('resign-black-won', ourColor === 'b' ? 'win' : 'loss');
+    // Side-agnostic "won by resignation" — DON'T assume it's our win. Defer
+    // to activeColor: if it's still our turn (we hadn't moved), we resigned
+    // (loss). If it's opponent's turn, opponent resigned (win).
+    return settle('resign-activecolor', activeColor === ourColor ? 'loss' : 'win');
+  }
+
+  // === TIMEOUT ===
+  if (text.includes('timeout') || text.includes('time out') || text.includes('ran out of time') || text.includes('on time')) {
+    if (text.includes('white') && (text.includes('won') || text.includes('win')))
+      return settle('timeout-white-won', ourColor === 'w' ? 'win' : 'loss');
+    if (text.includes('black') && (text.includes('won') || text.includes('win')))
+      return settle('timeout-black-won', ourColor === 'b' ? 'win' : 'loss');
+    // "won on time" — fall through to username/score checks below rather than
+    // blindly returning a result. The score check (step 3a) usually handles
+    // this; this branch is just for older UIs.
+  }
+
+  // === ABANDONMENT — handle BEFORE the generic "abandoned -> draw" branch ===
+  // Match the stem 'abandon' so we catch both "abandoned" and "abandonment".
+  if (text.includes('abandon')) {
+    if (text.includes('white abandon'))
+      return settle('abandon-white', ourColor === 'w' ? 'loss' : 'win');
+    if (text.includes('black abandon'))
+      return settle('abandon-black', ourColor === 'b' ? 'loss' : 'win');
+    if (text.includes('white won') || text.includes('white wins'))
+      return settle('abandon-white-won', ourColor === 'w' ? 'win' : 'loss');
+    if (text.includes('black won') || text.includes('black wins'))
+      return settle('abandon-black-won', ourColor === 'b' ? 'win' : 'loss');
+    // Side-agnostic "won by abandonment" — defer to activeColor.
+    if (text.includes('won by abandon') || text.includes('wins by abandon')) {
+      return settle('abandon-activecolor', activeColor === ourColor ? 'loss' : 'win');
+    }
+    // Otherwise fall through to the generic abandon/abort -> draw branch.
+  }
+
+  // === EXPLICIT WIN phrases ===
   if (
     text.includes('you won') ||
-    text.includes('victory') ||
-    text.includes('won on time') ||
-    text.includes('you win')
+    text.includes('you win') ||
+    text.includes('victory')
   )
-    return 'win';
+    return settle('phrase-you-won', 'win');
 
-  // Loss detection
+  // === EXPLICIT LOSS phrases ===
   if (
     text.includes('you lost') ||
-    text.includes('defeat') ||
-    text.includes('lost on time') ||
-    text.includes('you lose')
+    text.includes('you lose') ||
+    text.includes('defeat')
   )
-    return 'loss';
+    return settle('phrase-you-lost', 'loss');
 
-  // Resignation detection
-  if (text.includes('resigned')) {
-    // "White resigned" means black won, "Black resigned" means white won
-    if (text.includes('white resigned'))
-      return ourColor === 'w' ? 'loss' : 'win';
-    if (text.includes('black resigned'))
-      return ourColor === 'b' ? 'loss' : 'win';
-    // Generic "resigned" — assume opponent resigned (we won)
-    return 'win';
-  }
-
-  // Abandonment
-  if (text.includes('abandoned') || text.includes('aborted'))
-    return 'draw';
-
-  // Checkmate
-  if (text.includes('checkmate')) {
-    if (text.includes('white') && text.includes('win'))
-      return ourColor === 'w' ? 'win' : 'loss';
-    if (text.includes('black') && text.includes('win'))
-      return ourColor === 'b' ? 'win' : 'loss';
-    // Fallback: if it says checkmate, check whose turn it was
-    // If it was our turn when checkmate happened, we lost
-    return activeColor === ourColor ? 'loss' : 'win';
-  }
-
-  // Color-specific win text
+  // === COLOR-SPECIFIC win text ===
   if (text.includes('white won') || text.includes('white is victorious') || text.includes('white wins'))
-    return ourColor === 'w' ? 'win' : 'loss';
+    return settle('phrase-white-won', ourColor === 'w' ? 'win' : 'loss');
   if (text.includes('black won') || text.includes('black is victorious') || text.includes('black wins'))
-    return ourColor === 'b' ? 'win' : 'loss';
+    return settle('phrase-black-won', ourColor === 'b' ? 'win' : 'loss');
 
-  // Timeout
-  if (text.includes('timeout') || text.includes('time out') || text.includes('ran out of time')) {
-    if (text.includes('white')) return ourColor === 'w' ? 'loss' : 'win';
-    if (text.includes('black')) return ourColor === 'b' ? 'loss' : 'win';
-    return 'loss'; // If we can't tell, assume we lost on time
+  // === GENERIC "won" with color context ===
+  // chess.com often says "<username> won by <reason>"
+  if (text.includes(' won ') || text.includes(' wins ')) {
+    // Try to determine who won by checking which username appears
+    const bottomPlayer = document.querySelector(
+      '.board-player-default-bottom .user-tagline-username, [class*="player-bottom"] [class*="username"]'
+    );
+    const topPlayer = document.querySelector(
+      '.board-player-default-top .user-tagline-username, [class*="player-top"] [class*="username"]'
+    );
+    if (bottomPlayer && topPlayer) {
+      const bottomName = (bottomPlayer.textContent || '').trim().toLowerCase();
+      const topName = (topPlayer.textContent || '').trim().toLowerCase();
+      // Bottom player is always us
+      if (bottomName && text.includes(bottomName) && text.includes(bottomName + ' won')) return settle('username-bottom-won', 'win');
+      if (topName && text.includes(topName) && text.includes(topName + ' won')) return settle('username-top-won', 'loss');
+    }
   }
 
-  return 'draw';
+  // === ABANDONMENT / ABORTED (only when there's no winner phrase) ===
+  if ((text.includes('abandon') || text.includes('aborted')) &&
+      !text.includes('won') && !text.includes('wins')) {
+    return settle('abandon-noresult', 'draw');
+  }
+
+  // === DRAW detection (checked AFTER win/loss to avoid false positives from "Draw" button) ===
+  if (
+    text.includes('game drawn') ||
+    text.includes('drawn by') ||
+    text.includes('draw by') ||
+    text.includes('the game is a draw') ||
+    text.includes('stalemate') ||
+    text.includes('insufficient material') ||
+    text.includes('repetition') ||
+    text.includes('agreed to a draw') ||
+    text.includes('50-move') ||
+    text.includes('50 move')
+  )
+    return settle('draw-phrase', 'draw');
+
+  // === FALLBACK: Use board state heuristic ===
+  // If we can't determine the outcome from text, try to infer from the board
+  console.log('[Automata Outcome] Text parsing inconclusive. Using board heuristic fallback.');
+  const boardState = parseBoardDOM();
+  if (boardState) {
+    let ourPieces = 0, theirPieces = 0;
+    const opponent = ourColor === 'w' ? 'b' : 'w';
+    for (const sq in boardState) {
+      if (boardState[sq][0] === ourColor) ourPieces++;
+      if (boardState[sq][0] === opponent) theirPieces++;
+    }
+    // Check if opponent's king is missing (checkmate already applied)
+    const oppKing = Object.values(boardState).find(p => p === opponent + 'k');
+    const ourKing = Object.values(boardState).find(p => p === ourColor + 'k');
+    if (!oppKing && ourKing) return settle('board-no-oppking', 'win');
+    if (!ourKing && oppKing) return settle('board-no-ourking', 'loss');
+
+    // Material advantage heuristic (rough guess)
+    console.log(`[Automata Outcome] Piece count: ours=${ourPieces}, theirs=${theirPieces}`);
+    if (ourPieces > theirPieces + 3) return settle('board-material-up', 'win');
+    if (theirPieces > ourPieces + 3) return settle('board-material-down', 'loss');
+  }
+
+  if (text.includes('checkmate') || text.includes('resign') ||
+      text.includes('time') || text.includes('abandon')) {
+    return settle('decisive-activecolor', activeColor === ourColor ? 'loss' : 'win');
+  }
+
+  console.log('[Automata Outcome] Could not determine outcome, defaulting to draw. Text sample:',
+              text.substring(0, 300));
+  return settle('default-draw', 'draw');
 }
 
 function handleAutoQueue() {
   if (autoQueueTimeout) return;
-  const queueDelay = 8000 + Math.random() * 8000;
 
-  autoQueueTimeout = setTimeout(() => {
-    autoQueueTimeout = null;
-    // Don't queue if a game is currently in progress (prevents false game-over triggers)
-    if (gameInProgress) return;
-    chrome.storage.local.get({ autoQueue: true }, (settings) => {
-      if (!settings.autoQueue) return;
+  chrome.storage.local.get({
+    autoQueue: true,
+    breaksEnabled: true,
+    randomBreaks: false,
+    gamesBeforeBreak: 10,
+    breakMinutes: 10,
+    gamesSinceBreak: 0,
+    breakBatchGames: 0,
+    breakUntil: 0,
+  }, (settings) => {
+    if (!settings.autoQueue) return;
 
-      updateSystemStatus("running", "Queueing Match...");
-      autoQueueInProgress = true; // Suppress board observer during navigation
-      // Save intent to queue, then navigate to the play page directly
-      sessionStorage.setItem("automata_autoqueue", "true");
-      // Navigate to /play/online directly instead of reloading — this lands us
-      // on the matchmaking page where the "Play" button is immediately available.
-      const targetUrl = 'https://www.chess.com/play/online';
-      if (window.location.href.includes('/play/online')) {
-        window.location.reload();
-      } else {
-        window.location.href = targetUrl;
+    // If we're already inside a persisted break (page reloaded mid-break),
+    // schedule the queue for the REMAINING break time instead of starting a
+    // new short delay. This is what was missing: the in-memory timer used to
+    // get lost on every page reload, leaving the watchdog free to "recover".
+    const now = Date.now();
+    if (settings.breakUntil && now < settings.breakUntil) {
+      const remaining = settings.breakUntil - now;
+      const mins = Math.round(remaining / 60000);
+      console.log(`[Automata Break] Resuming persisted break — ${mins} min remaining.`);
+      updateSystemStatus("idle", `On Break — ~${mins} min remaining`);
+      autoQueueTimeout = setTimeout(fireQueueNavigation, remaining);
+      return;
+    }
+
+    // Default short delay between games (looks human, not an instant re-queue)
+    let queueDelay = 8000 + Math.random() * 8000;
+    let onBreak = false;
+    let breakMs = 0;
+
+    // Count this finished game toward the current batch
+    let gamesSinceBreak = (settings.gamesSinceBreak || 0) + 1;
+    let batchGames = settings.breakBatchGames;
+
+    const pickBatchGames = () =>
+      settings.randomBreaks
+        ? 5 + Math.floor(Math.random() * 11)                 // auto: 5-15 games
+        : Math.max(1, parseInt(settings.gamesBeforeBreak, 10) || 10);
+
+    const pickBreakMs = () =>
+      settings.randomBreaks
+        ? (3 + Math.random() * 17) * 60000                   // auto: 3-20 min
+        : Math.max(0, parseFloat(settings.breakMinutes) || 0) * 60000;
+
+    if (settings.breaksEnabled) {
+      if (!batchGames || batchGames < 1) batchGames = pickBatchGames();
+
+      if (gamesSinceBreak >= batchGames) {
+        // Time for a break before queueing the next match
+        onBreak = true;
+        breakMs = pickBreakMs();
+        queueDelay = breakMs;
+        gamesSinceBreak = 0;
+        batchGames = pickBatchGames(); // size for the next batch
+
+        // A break is a REST — clear the in-memory accumulated state so the
+        // next batch plays fresh. Without this, fatigue (-3 ELO per point)
+        // and the consecutive-wins streak-breaker carry across breaks and
+        // the bot's effective ELO never recovers, leading to long losing
+        // streaks. This is what a human would actually do: take 10 min off
+        // and come back focused.
+        humanProfile.fatigue = 0;
+        humanProfile.consecutiveWins = 0;
+        humanProfile.lastOutcome = null;
+        humanProfile.currentPersonality = null; // re-rolled on next game
+        console.log('[Automata Break] Reset fatigue/tilt/streak for fresh batch.');
       }
-    });
-  }, queueDelay);
+    }
+
+    // Persist counters + absolute break end time so a page reload doesn't
+    // erase the break (and the stuck-watchdog respects it).
+    const breakUntil = onBreak ? (now + breakMs) : 0;
+    chrome.storage.local.set({ gamesSinceBreak, breakBatchGames: batchGames, breakUntil });
+
+    if (onBreak) {
+      const mins = Math.round(breakMs / 60000);
+      console.log(`[Automata Break] Batch complete. Pausing ~${mins} min before next match.`);
+      updateSystemStatus("idle", `On Break — next match in ~${mins} min`);
+    }
+
+    autoQueueTimeout = setTimeout(fireQueueNavigation, queueDelay);
+  });
+}
+
+// Extracted so we can re-schedule it after a page reload mid-break.
+function fireQueueNavigation() {
+  autoQueueTimeout = null;
+  // Clear the persisted break (it's over).
+  chrome.storage.local.set({ breakUntil: 0 });
+  if (gameInProgress) return;
+  chrome.storage.local.get({ autoQueue: true }, (s2) => {
+    if (!s2.autoQueue) return;
+    updateSystemStatus("running", "Queueing Match...");
+    autoQueueInProgress = true;
+    sessionStorage.setItem("automata_autoqueue", "true");
+    const targetUrl = 'https://www.chess.com/play/online';
+    if (window.location.href.includes('/play/online')) {
+      window.location.reload();
+    } else {
+      window.location.href = targetUrl;
+    }
+  });
+}
+
+// On page load, if a break is still in flight, restore the timer so we don't
+// idle forever (or fire the watchdog) during whatever time remains.
+chrome.storage.local.get({ breakUntil: 0 }, (s) => {
+  const now = Date.now();
+  if (s.breakUntil && now < s.breakUntil && !autoQueueTimeout) {
+    const remaining = s.breakUntil - now;
+    const mins = Math.round(remaining / 60000);
+    console.log(`[Automata Break] Restored on load — ${mins} min remaining.`);
+    updateSystemStatus("idle", `On Break — ~${mins} min remaining`);
+    autoQueueTimeout = setTimeout(fireQueueNavigation, remaining);
+  } else if (s.breakUntil && now >= s.breakUntil) {
+    // Expired while page was gone — clear it.
+    chrome.storage.local.set({ breakUntil: 0 });
+  }
+});
+
+// ============================================================
+// STUCK / RECOVERY WATCHDOG
+// chess.com can hang on "finding an opponent" OR leave us parked on an
+// aborted/finished game page (e.g. /game/<id>). A manual refresh + re-queue
+// fixes it, so we detect "not in a healthy game, with nothing scheduled" and
+// do that automatically.
+// ============================================================
+let stuckSince = 0;
+const STUCK_TIMEOUT_MS = 40000; // 40s with no progress => refresh & re-queue
+
+function isSearchingForOpponent() {
+  const container = document.querySelector(
+    '[class*="matchmaking"], [class*="vs-screen"], [class*="waiting-component"], ' +
+    '[class*="searching"]'
+  );
+  if (container && (container.offsetWidth > 0 || container.offsetHeight > 0)) return true;
+
+  const t = (document.body?.innerText || '').toLowerCase();
+  if (
+    t.includes('waiting for opponent') ||
+    t.includes('finding opponent') ||
+    t.includes('finding a worthy') ||
+    t.includes('searching for') ||
+    t.includes('looking for an opponent')
+  ) return true;
+
+  return false;
+}
+
+function requeueNow(reason) {
+  const ts = new Date().toLocaleTimeString();
+  console.warn(`[Automata] ${reason} — refreshing & re-queueing.`);
+  recoveryLog.unshift(`[${ts}] Auto: ${reason}`);
+  if (recoveryLog.length > 10) recoveryLog.pop();
+  updateSystemStatus('thinking', 'Stuck — refreshing & re-queueing...');
+
+  stuckSince = 0;
+  gameInProgress = false;
+  isMakingMove = false;
+  autoQueueInProgress = true; // suppress board observer during navigation
+  sessionStorage.setItem('automata_autoqueue', 'true');
+  window.location.href = 'https://www.chess.com/play/online';
+}
+
+function hasActiveClock() {
+  // chess.com adds 'clock-player-turn' to whichever player's clock is ticking.
+  // An aborted/finished game has no ticking clock; a live game almost always does.
+  return !!document.querySelector(
+    '.clock-player-turn, [class*="clock"][class*="player-turn"]'
+  );
+}
+
+function checkStuck() {
+  // A queue/break is already scheduled, or we're mid-navigation → not stuck.
+  if (autoQueueInProgress || autoQueueTimeout) { stuckSince = 0; return; }
+
+  chrome.storage.local.get({ autoPlay: true, autoQueue: true, breakUntil: 0 }, (s) => {
+    if (!s.autoPlay || !s.autoQueue) { stuckSince = 0; return; }
+
+    // Inside a persisted break window — leave it alone. (The in-memory
+    // autoQueueTimeout can get wiped by a page reload mid-break; this
+    // storage-backed check survives that.)
+    if (s.breakUntil && Date.now() < s.breakUntil) {
+      stuckSince = 0;
+      return;
+    }
+
+    // A tracked game that isn't over → leave it alone; in-game recovery
+    // (move retries / force-recover) handles genuine in-game stalls.
+    if (gameInProgress && !isGameOver()) { stuckSince = 0; return; }
+
+    // Not in a tracked game: if a clock is actively ticking (and not game-over),
+    // a live game is starting/active — the observer will catch it. Not stuck.
+    if (!gameInProgress && hasActiveClock() && !isGameOver()) { stuckSince = 0; return; }
+
+    // Idle: matchmaking stuck, parked on an aborted/finished game, or sitting on
+    // a board with no ticking clock and nothing scheduled.
+    if (stuckSince === 0) { stuckSince = Date.now(); return; }
+
+    if (Date.now() - stuckSince >= STUCK_TIMEOUT_MS) {
+      let reason = 'idle with no active game';
+      if (isSearchingForOpponent()) reason = 'matchmaking stuck';
+      else if (isGameOver()) reason = 'parked on finished/aborted game';
+      requeueNow(reason);
+    }
+  });
 }
 
 // Check for pending queue after a refresh
@@ -974,6 +1515,10 @@ async function processTurn() {
     {
       autoPlay: true,
       humanMode: true,
+      mustWin: false,                 // override everything for max strength
+      phaseEloMode: 'auto',           // 'auto' uses personality, 'manual' uses below
+      manualMiddlegameElo: 1200,
+      manualEndgameElo: 1300,
       engineUrl: "http://100.86.25.112:8000/move",
       targetAccuracy: 80,
       premoveProb: 20,
@@ -998,10 +1543,26 @@ async function processTurn() {
       // Determine ELO to send to the engine
       let elo = 1100; // default
       let isBlundering = false;
+      let isMustWin = false;
       const personality = humanProfile.currentPersonality;
 
-      if (settings.humanMode && personality) {
+      if (settings.mustWin) {
+        // MUST WIN: max ELO, no blunders, server returns rank-1 (best) move
+        // unconditionally. Overrides Human Mode and Phase ELO entirely.
+        isMustWin = true;
+        elo = 2000;
+        console.log('[Automata MUST-WIN] Max strength, no blunders, no sampling.');
+      } else if (settings.humanMode && personality) {
         const moveNum = Math.ceil((moveHistory.length + 1) / 2);
+
+        // Phase ELO override: when set to 'manual', replace personality's
+        // middle/endgame ELOs with the user-configured values for THIS move.
+        // We don't override openingElo — opening keeps the auto strong-book bias.
+        if (settings.phaseEloMode === 'manual') {
+          personality.middlegameElo = settings.manualMiddlegameElo;
+          personality.endgameElo    = settings.manualEndgameElo;
+        }
+
         elo = getPhaseElo(moveNum, personality);
 
         // Check for blunder: request at very low ELO instead
@@ -1010,17 +1571,18 @@ async function processTurn() {
           elo = 400 + Math.floor(Math.random() * 200); // terrible move
           console.log(`[Automata Human] BLUNDER on move ${moveNum}! Using ELO ${elo}`);
         } else {
-          console.log(`[Automata Human] Move ${moveNum}, phase ELO: ${elo}`);
+          console.log(`[Automata Human] Move ${moveNum}, phase ELO: ${elo} (${settings.phaseEloMode})`);
         }
       } else {
         // Manual mode: convert accuracy slider (50-95) to ELO (800-1500)
         elo = Math.round(800 + (settings.targetAccuracy - 50) * (700 / 45));
       }
 
-      updateSystemStatus('thinking', 'Querying VPS Engine...');
+      updateSystemStatus('thinking',
+        isMustWin ? 'Must-Win: querying engine...' : 'Querying VPS Engine...');
 
-      // Override settings with computed ELO
-      const engineSettings = { ...settings, computedElo: elo };
+      // Override settings with computed ELO + mustWin flag for the engine.
+      const engineSettings = { ...settings, computedElo: elo, mustWin: isMustWin };
       const engineMove = await getEngineMove(engineSettings);
       if (!engineMove) return;
 
@@ -1036,10 +1598,19 @@ async function processTurn() {
       const isPreMove =
         Math.random() * 100 < settings.premoveProb ||
         (isRecapture && Math.random() * 100 < 60);
+
+      // Position context for complexity-aware timing
+      const boardNow = parseBoardDOM() || {};
+      const pieceCount = Object.keys(boardNow).length;
+      const destSq = engineMove.substring(2, 4);
+      const destPiece = boardNow[destSq];
+      const isCapture = !!(destPiece && destPiece[0] && destPiece[0] !== ourColor);
+
       const delay = getHumanDelay(
         moveHistory,
         settings.thinkingSpeed,
         isPreMove,
+        { pieceCount, isCapture, isRecapture },
       );
 
       setTimeout(() => {
@@ -1802,6 +2373,40 @@ function handleBoardUpdate() {
   }
 }
 
+// Asynchronously parse the game outcome with retry. parseGameOutcome can
+// return 'draw' incorrectly if chess.com hasn't finished rendering the
+// modal text yet (text contains no score, no checkmate phrase, no resign
+// phrase). We give it ~700ms to populate, parse, and if the result came
+// from the bottom-of-function fallback we wait another 700ms and try
+// again. Total worst case: ~1.4s extra latency on game end.
+async function endGameSequence(reason) {
+  console.log(`[Automata] endGameSequence(${reason}). Waiting for modal text...`);
+  await new Promise(r => setTimeout(r, 700));
+  let outcome = parseGameOutcome();
+  let branch = window.__chOutcomeBranch || '?';
+
+  const wasFallback = branch === 'default-draw' ||
+                      branch === 'decisive-activecolor' ||
+                      branch === 'board-material-up' ||
+                      branch === 'board-material-down';
+  if (wasFallback) {
+    console.log(`[Automata] Low-confidence outcome (${branch}=${outcome}). Retrying after 700ms...`);
+    await new Promise(r => setTimeout(r, 700));
+    outcome = parseGameOutcome();
+    branch = window.__chOutcomeBranch || '?';
+    console.log(`[Automata] Retry result: branch=${branch} -> ${outcome}`);
+  }
+
+  recordOutcome(outcome);
+  applyFatigue();
+  chrome.runtime
+    .sendMessage({ action: 'gameEnded', data: { outcome } })
+    .catch(() => {});
+  updateSystemStatus('idle', `Game Over: ${outcome.toUpperCase()} (${branch})`);
+  chrome.storage.local.remove(['savedGameId', 'savedHistory', 'savedColor', 'savedActive']);
+  handleAutoQueue();
+}
+
 function setupBoardObserver() {
   const boardEl =
     document.querySelector("chess-board") ||
@@ -1814,23 +2419,7 @@ function setupBoardObserver() {
       if (gameInProgress) {
         gameInProgress = false;
         isMakingMove = false; // Unlock in case we were stuck mid-move
-        const outcome = parseGameOutcome();
-        
-        // Update human profile
-        recordOutcome(outcome);
-        applyFatigue();
-        
-        chrome.runtime
-          .sendMessage({
-            action: 'gameEnded',
-            data: { outcome },
-          })
-          .catch(() => {});
-        updateSystemStatus('idle', `Game Over: ${outcome.toUpperCase()}`);
-        chrome.storage.local.remove(['savedGameId', 'savedHistory', 'savedColor', 'savedActive']);
-        
-        // Auto-queue next match
-        handleAutoQueue();
+        endGameSequence('board-observer');
       }
       return;
     }
@@ -1940,17 +2529,12 @@ function startLifecycle() {
       console.log('[Automata] Game-over detected by dedicated polling.');
       gameInProgress = false;
       isMakingMove = false;
-      const outcome = parseGameOutcome();
-      recordOutcome(outcome);
-      applyFatigue();
-      chrome.runtime
-        .sendMessage({ action: 'gameEnded', data: { outcome } })
-        .catch(() => {});
-      updateSystemStatus('idle', `Game Over: ${outcome.toUpperCase()}`);
-      chrome.storage.local.remove(['savedGameId', 'savedHistory', 'savedColor', 'savedActive']);
-      handleAutoQueue();
+      endGameSequence('poller');
     }
   }, 2000);
+
+  // Stuck/recovery watchdog — refresh & re-queue if not in a healthy game.
+  setInterval(checkStuck, 5000);
 }
 
 startLifecycle();
