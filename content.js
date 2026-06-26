@@ -1408,6 +1408,22 @@ function hasActiveClock() {
   );
 }
 
+// Read remaining time on OUR (bottom) clock in seconds. Returns null if we
+// can't parse it. chess.com formats: "9:59", "1:23:45", "0:25", "0:09.7"
+function getOurClockSeconds() {
+  const el = document.querySelector('.clock-bottom, [class*="clock-bottom"]');
+  if (!el) return null;
+  const txt = (el.innerText || el.textContent || '').trim();
+  // Match h:mm:ss or m:ss or m:ss.s — the trailing group can be a decimal.
+  const m = txt.match(/(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)/);
+  if (!m) return null;
+  const h = parseInt(m[1] || '0', 10);
+  const mn = parseInt(m[2], 10);
+  const s = parseFloat(m[3]);
+  if (isNaN(h) || isNaN(mn) || isNaN(s)) return null;
+  return h * 3600 + mn * 60 + s;
+}
+
 function checkStuck() {
   // A queue/break is already scheduled, or we're mid-navigation → not stuck.
   if (autoQueueInProgress || autoQueueTimeout) { stuckSince = 0; return; }
@@ -1516,6 +1532,8 @@ async function processTurn() {
       autoPlay: true,
       humanMode: true,
       mustWin: false,                 // override everything for max strength
+      timeScramble: false,            // when ON: low-clock = auto-mustwin + fast
+      timeScrambleThreshold: 30,      // seconds
       phaseEloMode: 'auto',           // 'auto' uses personality, 'manual' uses below
       manualMiddlegameElo: 1200,
       manualEndgameElo: 1300,
@@ -1544,11 +1562,27 @@ async function processTurn() {
       let elo = 1100; // default
       let isBlundering = false;
       let isMustWin = false;
+      let scrambleActive = false;
       const personality = humanProfile.currentPersonality;
 
-      if (settings.mustWin) {
-        // MUST WIN: max ELO, no blunders, server returns rank-1 (best) move
-        // unconditionally. Overrides Human Mode and Phase ELO entirely.
+      // TIME SCRAMBLE: when our clock drops below the threshold and the
+      // toggle is on, behave like Must-Win but with a fixed ~1s think delay.
+      // Cursor/click motion stays humanized — don't change executeMove paths.
+      if (settings.timeScramble) {
+        const ourSec = getOurClockSeconds();
+        if (ourSec !== null && ourSec < settings.timeScrambleThreshold) {
+          scrambleActive = true;
+          isMustWin = true;
+          elo = 2000;
+          settings.thinkingSpeed = 1.0;  // forces ~1s think via getHumanDelay
+          console.log(`[Automata Scramble] ${ourSec.toFixed(1)}s left -> MAX strength, 1s think`);
+        }
+      }
+
+      if (isMustWin) {
+        // already set by either mustWin toggle or time scramble — skip the
+        // Human Mode / manual branches below.
+      } else if (settings.mustWin) {
         isMustWin = true;
         elo = 2000;
         console.log('[Automata MUST-WIN] Max strength, no blunders, no sampling.');
@@ -1579,7 +1613,9 @@ async function processTurn() {
       }
 
       updateSystemStatus('thinking',
-        isMustWin ? 'Must-Win: querying engine...' : 'Querying VPS Engine...');
+        scrambleActive ? `Scramble! <${settings.timeScrambleThreshold}s — max strength` :
+        isMustWin     ? 'Must-Win: querying engine...' :
+                        'Querying VPS Engine...');
 
       // Override settings with computed ELO + mustWin flag for the engine.
       const engineSettings = { ...settings, computedElo: elo, mustWin: isMustWin };

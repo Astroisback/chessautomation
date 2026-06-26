@@ -14,6 +14,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const speedVal = document.getElementById('speedVal');
 
   const mustWinToggle = document.getElementById('mustWin');
+  const scrambleToggle = document.getElementById('timeScramble');
   const humanModeRow = humanModeToggle ? humanModeToggle.closest('.toggle-control') : null;
 
   const statusBanner = document.getElementById('statusBanner');
@@ -31,6 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
     autoQueue: true,
     humanMode: true,
     mustWin: false,
+    timeScramble: false,
     engineUrl: 'http://100.86.25.112:8000/move',
     targetAccuracy: 80,
     premoveProb: 20,
@@ -63,6 +65,7 @@ document.addEventListener('DOMContentLoaded', () => {
     autoQueueToggle.checked = settings.autoQueue;
     humanModeToggle.checked = settings.humanMode;
     mustWinToggle.checked = settings.mustWin;
+    scrambleToggle.checked = settings.timeScramble;
     engineUrlInput.value = settings.engineUrl;
     
     accuracySlider.value = settings.targetAccuracy;
@@ -107,6 +110,10 @@ document.addEventListener('DOMContentLoaded', () => {
   mustWinToggle.addEventListener('change', () => {
     chrome.storage.local.set({ mustWin: mustWinToggle.checked });
     applyMustWinUI(mustWinToggle.checked);
+  });
+
+  scrambleToggle.addEventListener('change', () => {
+    chrome.storage.local.set({ timeScramble: scrambleToggle.checked });
   });
 
   accuracySlider.addEventListener('input', () => {
@@ -494,6 +501,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (changes.mustWin) {
       mustWinToggle.checked = changes.mustWin.newValue;
       applyMustWinUI(changes.mustWin.newValue);
+    }
+    if (changes.timeScramble) {
+      scrambleToggle.checked = changes.timeScramble.newValue;
     }
     if (changes.engineUrl) engineUrlInput.value = changes.engineUrl.newValue;
     if (changes.targetAccuracy) {

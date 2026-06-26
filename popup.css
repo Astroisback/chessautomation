@@ -412,6 +412,25 @@ input:checked + .slider:before {
   box-shadow: 0 0 10px rgba(239, 68, 68, 0.45);
 }
 
+/* Time Scramble Toggle — amber, situational override */
+.scramble-toggle {
+  border: 1px solid rgba(251, 191, 36, 0.22);
+  background: rgba(251, 191, 36, 0.04);
+}
+
+.scramble-toggle:hover {
+  background: rgba(251, 191, 36, 0.09);
+}
+
+.scramble-title {
+  color: #fcd34d;
+}
+
+.scramble-switch input:checked + .slider {
+  background: linear-gradient(135deg, #facc15, #ca8a04);
+  box-shadow: 0 0 10px rgba(250, 204, 21, 0.40);
+}
+
 /* Visually grey out Human Mode while Must Win is active */
 .toggle-control.disabled-by-mustwin {
   opacity: 0.45;
